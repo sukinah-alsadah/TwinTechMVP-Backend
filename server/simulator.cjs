@@ -1,14 +1,12 @@
-//redeploy trigger
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
-// Updated with graceful shutdown handler (Ctrl+C → isRunning=false)
+// Updated: realistic drift, status transitions, and correct offline/inactive behavior
 
 const express = require("express");
-const cors = require("cors"); // ⭐ ADDED
+const cors = require("cors");
 const admin = require("firebase-admin");
 const path = require("path");
 
 // ---------------- FIREBASE INIT ----------------
-// Load Firebase credentials from Render environment variable
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
@@ -18,7 +16,7 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// ---------------- GRACEFUL SHUTDOWN HANDLER (BUILT-IN) ----------------
+// ---------------- GRACEFUL SHUTDOWN HANDLER ----------------
 async function gracefulShutdown() {
   console.log("\n⚠️ Simulator shutting down… closing the gate (isRunning=false)");
   try {
@@ -30,12 +28,12 @@ async function gracefulShutdown() {
   process.exit(0);
 }
 
-process.on("SIGINT", gracefulShutdown);   // Ctrl + C
-process.on("SIGTERM", gracefulShutdown);  // kill or container stop
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
 
 // ---------------- EXPRESS APP ----------------
 const app = express();
-app.use(cors()); // ⭐ ADDED
+app.use(cors());
 
 const COMPRESSORS = [
   "compressor_1",
@@ -52,7 +50,7 @@ const HISTORY_INTERVAL_MS = 30000;
 let latestBatch = [];
 let lastHistorySave = Date.now();
 
-// ---------------- SIMULATOR CONTROL FLAG (SAFE VERSION) ----------------
+// ---------------- SIMULATOR CONTROL FLAG ----------------
 async function checkIsRunning() {
   const snapshot = await db.ref("simulator/isRunning").once("value");
   const raw = snapshot.val();
@@ -79,6 +77,104 @@ async function checkInactivity() {
 
   const TEN_MINUTES = 10 * 60 * 1000;
   return diff > TEN_MINUTES;
+}
+
+// ---------------- MEMORY FOR DRIFT + STATUS ----------------
+const compressorMemory = {
+  compressor_1: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "active",
+    lastChange: Date.now()
+  },
+  compressor_2: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "active",
+    lastChange: Date.now()
+  },
+  compressor_3: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "active",
+    lastChange: Date.now()
+  },
+  compressor_4: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "active",
+    lastChange: Date.now()
+  },
+  compressor_5: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "inactive", // fixed idle unit
+    lastChange: Date.now()
+  },
+  compressor_6: {
+    temperature: 78,
+    vibration: 2.8,
+    pressure: 100,
+    flow: 200,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    state: "offline", // fixed offline unit
+    lastChange: Date.now()
+  }
+};
+
+// ---------------- STATUS TRANSITION LOGIC ----------------
+function chooseStatus(id) {
+  const mem = compressorMemory[id];
+  const now = Date.now();
+  const elapsed = now - mem.lastChange;
+
+  const MIN_ACTIVE = 30000;   // 30s
+  const MIN_INACTIVE = 20000; // 20s
+  const MIN_OFFLINE = 60000;  // 60s
+
+  let current = mem.state;
+
+  // Enforce minimum time in each state
+  if (current === "active" && elapsed < MIN_ACTIVE) return current;
+  if (current === "inactive" && elapsed < MIN_INACTIVE) return current;
+  if (current === "offline" && elapsed < MIN_OFFLINE) return current;
+
+  // After minimum time, allow transitions
+  const r = Math.random();
+
+  if (current === "active") {
+    if (r < 0.90) return "active";
+    if (r < 0.97) return "inactive";
+    return "offline";
+  }
+
+  if (current === "inactive") {
+    if (r < 0.70) return "inactive";
+    if (r < 0.95) return "active";
+    return "offline";
+  }
+
+  if (current === "offline") {
+    if (r < 0.85) return "offline";
+    return "inactive"; // offline → inactive first
+  }
+
+  return current;
 }
 
 // ---------------- MAIN LOOP ----------------
@@ -126,34 +222,95 @@ async function writeHistoryToFirebase(batch) {
   await ref.child(ts).set(batch);
   console.log("History snapshot written:", ts);
 }
-// --- MEMORY FOR DRIFT (per compressor) ---
-const compressorMemory = {
-  compressor_1: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
-  compressor_2: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
-  compressor_3: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
-  compressor_4: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
-  compressor_5: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
-  compressor_6: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 }
-};
+
 // ---------------- DATA GENERATION ----------------
 function generateCompressorData(id) {
-  // --- SMOOTH DRIFT MODEL ---
   const mem = compressorMemory[id];
 
-  // small drift values (medium dynamic)
-  const drift = () => (Math.random() - 0.5) * 0.6; // ±0.3 average
+  // 1) STATUS: choose realistic state
+  let status = chooseStatus(id);
+  if (status !== mem.state) {
+    mem.state = status;
+    mem.lastChange = Date.now();
+  }
 
-  // apply drift
-  mem.temperature += drift();
-  mem.vibration += drift() * 0.4;  // vibration moves slower
-  mem.pressure += drift() * 0.3;   // pressure moves very slowly
-  mem.flow += drift() * 2.0;       // flow moves more dynamically
+  // 2) OFFLINE: return early, no telemetry, no AI, no warnings
+  if (status === "offline") {
+    return {
+      compressor_id: id,
+      timestamp: Date.now(),
+      status: "offline",
+      temperature: null,
+      vibration: null,
+      pressure: null,
+      flow_rate: null,
+      warning: "none",
+      event_type: "none",
+      risk_score: 0,
+      ai_alert: false,
+      ai_reason: "No AI alert (unit offline, no telemetry).",
+      message: "Compressor offline — no telemetry.",
+      insights_manager: "Unit offline — no current production impact.",
+      insights_engineer: "AI monitoring paused until the compressor returns to operation.",
+      insights_maintenance: "Check power, connectivity, and safety interlocks if shutdown was not expected."
+    };
+  }
+
+  // 3) REALISTIC DRIFT MODEL (active + inactive only)
+
+  // trend update helper (smooth, directional)
+  const updateTrend = (trendKey, baseScale) => {
+    mem.trend[trendKey] =
+      mem.trend[trendKey] * 0.8 + (Math.random() - 0.5) * baseScale;
+  };
+
+  if (status === "active") {
+    // stronger trends
+    updateTrend("temp", 0.08);
+    updateTrend("vib", 0.04);
+    updateTrend("press", 0.03);
+    updateTrend("flow", 0.15);
+  } else if (status === "inactive") {
+    // very slow trends
+    updateTrend("temp", 0.03);
+    updateTrend("vib", 0.015);
+    updateTrend("press", 0.01);
+    updateTrend("flow", 0.05);
+  }
+
+  // apply trend-based drift
+  if (status === "active" || status === "inactive") {
+    mem.temperature += mem.trend.temp;
+    mem.vibration += mem.trend.vib;
+    mem.pressure += mem.trend.press;
+    mem.flow += mem.trend.flow;
+
+    // correlation: hotter → slightly more vibration
+    mem.vibration += mem.trend.temp * 0.05;
+
+    // correlation: flow drop → pressure drop
+    mem.pressure += mem.trend.flow * -0.03;
+
+    // baseline pull (stability)
+    const TEMP_BASE = 80;
+    const VIB_BASE = 3.0;
+    const PRESS_BASE = 100;
+    const FLOW_BASE = status === "active" ? 200 : 125;
+
+    mem.temperature += (TEMP_BASE - mem.temperature) * 0.01;
+    mem.vibration += (VIB_BASE - mem.vibration) * 0.01;
+    mem.pressure += (PRESS_BASE - mem.pressure) * 0.01;
+    mem.flow += (FLOW_BASE - mem.flow) * 0.02;
+  }
 
   // clamp realistic ranges
   mem.temperature = Math.min(Math.max(mem.temperature, 74), 95);
   mem.vibration = Math.min(Math.max(mem.vibration, 1.5), 5.0);
   mem.pressure = Math.min(Math.max(mem.pressure, 96), 104);
-  mem.flow = Math.min(Math.max(mem.flow, 150), 230);
+  mem.flow = Math.min(
+    Math.max(mem.flow, status === "active" ? 150 : 100),
+    status === "active" ? 230 : 150
+  );
 
   // assign final values
   let temperature = mem.temperature;
@@ -161,62 +318,38 @@ function generateCompressorData(id) {
   let pressure = mem.pressure;
   let flow = mem.flow;
 
-  let status = "active";
-
-  if (id === "compressor_5") {
-    status = "inactive";
-    flow = 115 + Math.random() * 20;
-  } else if (id === "compressor_6") {
-    status = "offline";
-    flow = 20 + Math.random() * 30;
-  } else {
-    const rStatus = Math.random();
-    if (rStatus < 0.90) {
-      status = "active";
-      flow = 190 + Math.random() * 25;
-    } else if (rStatus < 0.97) {
-      status = "inactive";
-      flow = 115 + Math.random() * 20;
-    } else {
-      status = "offline";
-      flow = 20 + Math.random() * 30;
-    }
-  }
-
+  // 4) WARNING + EVENT TYPE
   let warning = "normal";
   let event_type = "normal";
 
-  if (status === "offline") {
-    warning = "normal";
-    event_type = "none";
-  } else if (status === "active") {
-    // --- RARE HIGH WARNING LOGIC (Option A) ---
-    if (status === "active") {
-      // thresholds based on drifted values
-      if (temperature > 90 || vibration > 4.2 || pressure < 97 || flow < 170) {
-        warning = "medium";
-        event_type = weightedChoice(["vibration", "pressure", "low_flow", "overheating"], [3, 3, 2, 2]);
+  if (status === "active") {
+    // thresholds based on drifted values
+    if (temperature > 90 || vibration > 4.2 || pressure < 97 || flow < 170) {
+      warning = "medium";
+      event_type = weightedChoice(
+        ["vibration", "pressure", "low_flow", "overheating"],
+        [3, 3, 2, 2]
+      );
 
-        // HIGH only if medium persists AND values are clearly bad
-        if (
-          (temperature > 92 || vibration > 4.5 || flow < 160) &&
-          Math.random() < 0.02 // 2% chance → VERY rare
-        ) {
-          warning = "high";
-        }
-
-      } else {
-        warning = "normal";
-        event_type = "normal";
+      // HIGH only if clearly bad + rare
+      if (
+        (temperature > 92 || vibration > 4.5 || flow < 160) &&
+        Math.random() < 0.02
+      ) {
+        warning = "high";
       }
+    } else {
+      warning = "normal";
+      event_type = "normal";
     }
 
-    if (warning !== "normal") {
+    if (warning !== "normal" && event_type === "normal") {
       const events = ["vibration", "pressure", "low_flow", "overheating"];
       const weights = [3, 3, 2, 2];
       event_type = weightedChoice(events, weights);
     }
   } else if (status === "inactive") {
+    // sensors online, idle state — rare medium warnings
     const rWarn = Math.random();
     if (rWarn < 0.97) {
       warning = "normal";
@@ -229,6 +362,7 @@ function generateCompressorData(id) {
     }
   }
 
+  // 5) RISK SCORE
   let risk_score = 0;
 
   if (status === "active") {
@@ -251,12 +385,11 @@ function generateCompressorData(id) {
     } else if (warning === "medium") {
       risk_score = 3.0 + Math.random() * 3.0;
     }
-  } else if (status === "offline") {
-    risk_score = 0;
   }
 
   risk_score = Number(risk_score.toFixed(2));
 
+  // 6) AI LOGIC (active + inactive only)
   let ai_alert = false;
   let ai_reason = "No AI alert.";
 
@@ -291,11 +424,7 @@ function generateCompressorData(id) {
     }
   }
 
-  if (status === "offline") {
-    ai_alert = false;
-    ai_reason = "No AI alert (unit offline, no telemetry).";
-  }
-
+  // 7) HIGH WARNING sanity check
   if (status === "active" && warning === "high") {
     const clearlyAbnormal =
       temperature > 82 ||
@@ -309,6 +438,7 @@ function generateCompressorData(id) {
     }
   }
 
+  // 8) AI early detection upgrade (active only)
   if (status === "active" && ai_alert && warning === "normal") {
     warning = "medium";
 
@@ -339,6 +469,7 @@ function generateCompressorData(id) {
     }
   }
 
+  // 9) INSIGHTS
   const { message, manager, engineer, maintenance } =
     buildInsights({
       status,
@@ -351,6 +482,7 @@ function generateCompressorData(id) {
       flow
     });
 
+  // 10) FINAL OBJECT (structure unchanged)
   return {
     compressor_id: id,
     timestamp: Date.now(),
