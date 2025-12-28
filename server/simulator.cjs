@@ -2,6 +2,7 @@
 // Updated with graceful shutdown handler (Ctrl+C → isRunning=false)
 
 const express = require("express");
+const cors = require("cors"); // ⭐ ADDED
 const admin = require("firebase-admin");
 const path = require("path");
 
@@ -31,6 +32,25 @@ async function gracefulShutdown() {
 process.on("SIGINT", gracefulShutdown);   // Ctrl + C
 process.on("SIGTERM", gracefulShutdown);  // kill or container stop
 
+// ---------------- EXPRESS APP ----------------
+const app = express();
+app.use(cors()); // ⭐ ADDED
+
+const COMPRESSORS = [
+  "compressor_1",
+  "compressor_2",
+  "compressor_3",
+  "compressor_4",
+  "compressor_5",
+  "compressor_6"
+];
+
+const TICK_MS = 2000;
+const HISTORY_INTERVAL_MS = 30000;
+
+let latestBatch = [];
+let lastHistorySave = Date.now();
+
 // ---------------- SIMULATOR CONTROL FLAG (SAFE VERSION) ----------------
 async function checkIsRunning() {
   const snapshot = await db.ref("simulator/isRunning").once("value");
@@ -59,24 +79,6 @@ async function checkInactivity() {
   const TEN_MINUTES = 10 * 60 * 1000;
   return diff > TEN_MINUTES;
 }
-
-// ---------------- EXPRESS APP ----------------
-const app = express();
-
-const COMPRESSORS = [
-  "compressor_1",
-  "compressor_2",
-  "compressor_3",
-  "compressor_4",
-  "compressor_5",
-  "compressor_6"
-];
-
-const TICK_MS = 2000;
-const HISTORY_INTERVAL_MS = 30000;
-
-let latestBatch = [];
-let lastHistorySave = Date.now();
 
 // ---------------- MAIN LOOP ----------------
 async function runTick() {
