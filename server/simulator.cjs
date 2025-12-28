@@ -6,7 +6,8 @@ const admin = require("firebase-admin");
 const path = require("path");
 
 // ---------------- FIREBASE INIT ----------------
-const serviceAccount = require("./serviceAccountKey.json");
+// Load Firebase credentials from Render environment variable
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -124,7 +125,6 @@ async function writeHistoryToFirebase(batch) {
 }
 
 // ---------------- DATA GENERATION ----------------
-// (UNCHANGED — your full compressor logic remains exactly the same)
 function generateCompressorData(id) {
   let temperature = 75 + Math.random() * 8;
   let vibration = 2 + Math.random() * 2;
