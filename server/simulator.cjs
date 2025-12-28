@@ -507,4 +507,12 @@ function startServer(port) {
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.log(`Port ${port} in use, trying ${port + 1}...`);
-      startServer
+      startServer(port + 1);
+    } else {
+      console.error("Unhandled server error:", err);
+    }
+  });
+}
+
+const basePort = process.env.PORT ? Number(process.env.PORT) : 5000;
+startServer(basePort);
