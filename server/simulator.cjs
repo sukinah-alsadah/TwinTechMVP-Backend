@@ -1,3 +1,4 @@
+//redeploy trigger
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
 // Updated with graceful shutdown handler (Ctrl+C → isRunning=false)
 
