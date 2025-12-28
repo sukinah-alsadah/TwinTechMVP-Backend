@@ -454,15 +454,49 @@ function buildInsights(ctx) {
   return { message: observations, manager: observations, engineer: observations, maintenance: observations };
 }
 
-// ---------------- API + PORT FALLBACK ----------------
+// ---------------- API ENDPOINTS ----------------
+
+// Wake endpoint (frontend calls this after login)
+app.get("/wake", async (req, res) => {
+  console.log("⚡ Wake request received — keeping simulator alive");
+  await db.ref("simulator/lastActive").set(Date.now());
+  res.json({ status: "awake" });
+});
+
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: Date.now() });
+});
+
+// UI heartbeat (frontend calls every 10–20 seconds)
+app.post("/ui/active", async (req, res) => {
+  await db.ref("simulator/lastActive").set(Date.now());
+  res.json({ status: "updated" });
+});
+
+// Single compressor endpoint
+app.get("/api/compressor/:id", (req, res) => {
+  const id = req.params.id;
+  const item = latestBatch.find(c => c.compressor_id === id);
+
+  if (!item) {
+    return res.status(404).json({ error: "Compressor not found" });
+  }
+
+  res.json(item);
+});
+
+// Root endpoint
 app.get("/", (req, res) => {
   res.send("TwinTech Simulator is running.");
 });
 
+// Latest batch endpoint
 app.get("/api/latest", (req, res) => {
   res.json(latestBatch);
 });
 
+// ---------------- SERVER START ----------------
 function startServer(port) {
   const server = app.listen(port, () => {
     console.log(`TwinTech Simulator running at http://0.0.0.0:${port}`);
@@ -473,12 +507,4 @@ function startServer(port) {
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.log(`Port ${port} in use, trying ${port + 1}...`);
-      startServer(port + 1);
-    } else {
-      console.error("Unhandled server error:", err);
-    }
-  });
-}
-
-const basePort = process.env.PORT ? Number(process.env.PORT) : 5000;
-startServer(basePort);
+      startServer
