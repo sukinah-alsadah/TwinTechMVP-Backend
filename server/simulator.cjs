@@ -126,13 +126,40 @@ async function writeHistoryToFirebase(batch) {
   await ref.child(ts).set(batch);
   console.log("History snapshot written:", ts);
 }
-
+// --- MEMORY FOR DRIFT (per compressor) ---
+const compressorMemory = {
+  compressor_1: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
+  compressor_2: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
+  compressor_3: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
+  compressor_4: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
+  compressor_5: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 },
+  compressor_6: { temperature: 78, vibration: 2.8, pressure: 100, flow: 200 }
+};
 // ---------------- DATA GENERATION ----------------
 function generateCompressorData(id) {
-  let temperature = 75 + Math.random() * 8;
-  let vibration = 2 + Math.random() * 2;
-  let pressure = 98 + Math.random() * 4;
-  let flow = 190 + Math.random() * 25;
+  // --- SMOOTH DRIFT MODEL ---
+  const mem = compressorMemory[id];
+
+  // small drift values (medium dynamic)
+  const drift = () => (Math.random() - 0.5) * 0.6; // ±0.3 average
+
+  // apply drift
+  mem.temperature += drift();
+  mem.vibration += drift() * 0.4;  // vibration moves slower
+  mem.pressure += drift() * 0.3;   // pressure moves very slowly
+  mem.flow += drift() * 2.0;       // flow moves more dynamically
+
+  // clamp realistic ranges
+  mem.temperature = Math.min(Math.max(mem.temperature, 74), 95);
+  mem.vibration = Math.min(Math.max(mem.vibration, 1.5), 5.0);
+  mem.pressure = Math.min(Math.max(mem.pressure, 96), 104);
+  mem.flow = Math.min(Math.max(mem.flow, 150), 230);
+
+  // assign final values
+  let temperature = mem.temperature;
+  let vibration = mem.vibration;
+  let pressure = mem.pressure;
+  let flow = mem.flow;
 
   let status = "active";
 
@@ -163,14 +190,25 @@ function generateCompressorData(id) {
     warning = "normal";
     event_type = "none";
   } else if (status === "active") {
-    const rWarn = Math.random();
-    if (rWarn < 0.845) {
-      warning = "normal";
-      event_type = "normal";
-    } else if (rWarn < 0.995) {
-      warning = "medium";
-    } else {
-      warning = "high";
+    // --- RARE HIGH WARNING LOGIC (Option A) ---
+    if (status === "active") {
+      // thresholds based on drifted values
+      if (temperature > 90 || vibration > 4.2 || pressure < 97 || flow < 170) {
+        warning = "medium";
+        event_type = weightedChoice(["vibration", "pressure", "low_flow", "overheating"], [3, 3, 2, 2]);
+
+        // HIGH only if medium persists AND values are clearly bad
+        if (
+          (temperature > 92 || vibration > 4.5 || flow < 160) &&
+          Math.random() < 0.02 // 2% chance → VERY rare
+        ) {
+          warning = "high";
+        }
+
+      } else {
+        warning = "normal";
+        event_type = "normal";
+      }
     }
 
     if (warning !== "normal") {
