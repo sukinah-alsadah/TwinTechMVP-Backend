@@ -88,6 +88,7 @@ const warningThresholds = {
   pressureLow: { medium: 100.0, high: 97.5, min: 90, max: 105 },
   flowLow:     { medium: 199, high: 178, min: 120, max: 240 }
 };
+const WARNING_LOCK_MS = 20 * 1000; // 20 seconds
 
 function normalizeScore(value, type) {
   const t = warningThresholds[type];
