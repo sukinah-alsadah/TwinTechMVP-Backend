@@ -88,7 +88,7 @@ const warningThresholds = {
   pressureLow: { medium: 100.0, high: 97.5, min: 90, max: 105 },
   flowLow:     { medium: 199, high: 178, min: 120, max: 240 }
 };
-const WARNING_LOCK_MS = 20 * 1000; // 20 seconds
+const WARNING_LOCK_MS = 10 * 1000; // 1S0 seconds
 
 function normalizeScore(value, type) {
   const t = warningThresholds[type];
@@ -490,12 +490,12 @@ function generateCompressorData(id) {
   }
 
   // ---------------- CLAMP VALUES ----------------
-  if (status === "active") {
-    mem.temperature = clamp(mem.temperature, 80, 86);
-    mem.vibration   = clamp(mem.vibration, 2.8, 3.6);
-    mem.pressure    = clamp(mem.pressure, 99, 102);
-    mem.flow        = clamp(mem.flow, 190, 210);
-  } else if (status === "inactive") {
+ if (status === "active") {
+  mem.temperature = clamp(mem.temperature, 80, 87);
+  mem.vibration   = clamp(mem.vibration, 2.8, 3.7);
+  mem.pressure    = clamp(mem.pressure, 98.5, 102);
+  mem.flow        = clamp(mem.flow, 188, 210);
+} else if (status === "inactive") {
     mem.temperature = clamp(mem.temperature, 74, 78);
     mem.vibration   = clamp(mem.vibration, 1.6, 2.2);
     mem.pressure    = clamp(mem.pressure, 99, 100.5);
