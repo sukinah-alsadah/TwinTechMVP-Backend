@@ -90,13 +90,14 @@ async function checkInactivity() {
 
 // ---------------- WARNING THRESHOLDS + SCORING ----------------
 // Active: temperature ~80–86, vibration ~2.8–3.6, pressure ~99–102, flow ~190–210
-// Inactive: temperature ~74–78, vibration ~1.6–2.2, pressure ~98–100, flow ~105–125
+// Inactive: temperature ~74–78, vibration ~1.6–2.2, pressure ~99–100.5, flow ~105–125
 // Balanced variation: thresholds tuned so each parameter can occasionally trigger medium warnings.
 const warningThresholds = {
-  temperature: { medium: 85.2, high: 88.5, min: 70, max: 100 },
-  vibration:   { medium: 3.3,  high: 3.9,  min: 0,  max: 6 },
-  pressureLow: { medium: 99.2, high: 97.5, min: 90, max: 105 },
-  flowLow:     { medium: 188,  high: 178,  min: 120, max: 240 }
+  // lowered a bit so active can reach them
+  temperature: { medium: 84.5, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.2,  high: 3.9,  min: 0,  max: 6 },
+  pressureLow: { medium: 99.5, high: 97.5, min: 90, max: 105 },
+  flowLow:     { medium: 193,  high: 178,  min: 120, max: 240 }
 };
 
 function normalizeScore(value, type) {
@@ -272,7 +273,8 @@ const compressorMemory = {
   compressor_5: {
     temperature: 75,
     vibration: 1.8,
-    pressure: 98.5,
+    // raised baseline so it doesn't start below pressure threshold
+    pressure: 99.5,
     flow: 115,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "inactive",
@@ -445,7 +447,8 @@ function generateCompressorData(id) {
     const VIB_BASE_ACTIVE = 2.9;
     const VIB_BASE_INACTIVE = 1.9;
     const PRESS_BASE_ACTIVE = 100.5;
-    const PRESS_BASE_INACTIVE = 98.8;
+    // raised inactive base so it lives above medium threshold at start
+    const PRESS_BASE_INACTIVE = 99.5;
     const FLOW_BASE_ACTIVE = 200;
     const FLOW_BASE_INACTIVE = 115;
 
@@ -468,7 +471,8 @@ function generateCompressorData(id) {
   } else if (status === "inactive") {
     mem.temperature = clamp(mem.temperature, 74, 78);
     mem.vibration   = clamp(mem.vibration, 1.6, 2.2);
-    mem.pressure    = clamp(mem.pressure, 98, 100);
+    // clamp inactive pressure in a safe idle band above high-risk zone
+    mem.pressure    = clamp(mem.pressure, 99, 100.5);
     mem.flow        = clamp(mem.flow, 105, 125);
   }
 
@@ -671,8 +675,8 @@ function buildTrendObservations({ status, temperature, vibration, pressure, flow
   } else if (status === "inactive") {
     if (temperature > 77.5) notes.push("temperature slightly elevated during idle state");
     if (vibration > 2.1) notes.push("vibration higher than expected for idle operation");
-    if (pressure < 98.2) notes.push("pressure slightly below expected idle baseline");
-    else if (pressure > 99.8) notes.push("pressure slightly above expected idle baseline");
+    if (pressure < 99.0) notes.push("pressure slightly below expected idle baseline");
+    else if (pressure > 100.3) notes.push("pressure slightly above expected idle baseline");
     if (flow < 110) notes.push("flow slightly low for idle state");
     else if (flow > 122) notes.push("flow slightly high for idle state");
   } else if (status === "offline") {
