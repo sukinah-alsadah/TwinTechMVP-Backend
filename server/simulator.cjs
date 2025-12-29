@@ -89,15 +89,17 @@ async function checkInactivity() {
 }
 
 // ---------------- WARNING THRESHOLDS + SCORING ----------------
-// Active: temperature ~80–86, vibration ~2.8–3.6, pressure ~99–102, flow ~190–210
-// Inactive: temperature ~74–78, vibration ~1.6–2.2, pressure ~99–100.5, flow ~105–125
-// Balanced variation: thresholds tuned so each parameter can occasionally trigger medium warnings.
+// Updated thresholds for better variation:
+// - Temperature medium: 83.9
+// - Vibration medium: 3.25
+// - Flow medium: 197
+// - Pressure medium: 99.7
+
 const warningThresholds = {
-  // slightly more sensitive so active can reach them more often
-  temperature: { medium: 84.2, high: 88.5, min: 70, max: 100 },
-  vibration:   { medium: 3.15, high: 3.9,  min: 0,  max: 6 },
+  temperature: { medium: 83.9, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.25, high: 3.9, min: 0, max: 6 },
   pressureLow: { medium: 99.7, high: 97.5, min: 90, max: 105 },
-  flowLow:     { medium: 195,  high: 178,  min: 120, max: 240 }
+  flowLow:     { medium: 197, high: 178, min: 120, max: 240 }
 };
 
 function normalizeScore(value, type) {
@@ -145,7 +147,6 @@ function getSeverity(value, type) {
 
   return "normal";
 }
-
 function evaluateWarning(readings, currentWarningState) {
   const now = Date.now();
   const { temperature, vibration, pressure, flow, status, compressor_id } = readings;
@@ -314,25 +315,24 @@ function chooseStatus(id) {
   const r = Math.random();
 
   if (current === "active") {
-    if (r < 0.999) return "active";      // 99.9% stay active
-    if (r < 0.9999) return "inactive";   // 0.09% chance
-    return "offline";                    // 0.01% chance (almost never)
+    if (r < 0.999) return "active";
+    if (r < 0.9999) return "inactive";
+    return "offline";
   }
 
   if (current === "inactive") {
-    if (r < 0.96) return "inactive";     // 96% stay inactive
-    if (r < 0.995) return "active";      // 3.5% chance
-    return "offline";                    // 0.5% chance
+    if (r < 0.96) return "inactive";
+    if (r < 0.995) return "active";
+    return "offline";
   }
 
   if (current === "offline") {
-    if (r < 0.99) return "offline";      // 99% stay offline
-    return "inactive";                   // 1% chance
+    if (r < 0.99) return "offline";
+    return "inactive";
   }
 
   return current;
 }
-
 // ---------------- MAIN LOOP ----------------
 async function runTick() {
   const running = await checkIsRunning();
@@ -394,6 +394,7 @@ function generateCompressorData(id) {
     mem.lastChange = Date.now();
   }
 
+  // OFFLINE → no telemetry
   if (status === "offline") {
     return {
       compressor_id: id,
@@ -415,9 +416,9 @@ function generateCompressorData(id) {
     };
   }
 
-  const updateTrend = (trendKey, baseScale) => {
-    mem.trend[trendKey] =
-      mem.trend[trendKey] * 0.85 + (Math.random() - 0.5) * baseScale;
+  // ---------------- DRIFT ENGINE ----------------
+  const updateTrend = (key, scale) => {
+    mem.trend[key] = mem.trend[key] * 0.85 + (Math.random() - 0.5) * scale;
   };
 
   if (status === "active") {
@@ -432,15 +433,18 @@ function generateCompressorData(id) {
     updateTrend("flow", 0.01);
   }
 
+  // Apply drift
   if (status === "active" || status === "inactive") {
     mem.temperature += mem.trend.temp;
     mem.vibration += mem.trend.vib;
     mem.pressure += mem.trend.press;
     mem.flow += mem.trend.flow;
 
+    // Cross‑coupling
     mem.vibration += mem.trend.temp * 0.03;
     mem.pressure += mem.trend.flow * -0.02;
 
+    // Baselines
     const TEMP_BASE_ACTIVE = 81;
     const TEMP_BASE_INACTIVE = 75.5;
     const VIB_BASE_ACTIVE = 2.9;
@@ -455,12 +459,14 @@ function generateCompressorData(id) {
     const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
     const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
 
+    // Pull toward baseline
     mem.temperature += (TEMP_BASE - mem.temperature) * 0.02;
     mem.vibration += (VIB_BASE - mem.vibration) * 0.02;
     mem.pressure += (PRESS_BASE - mem.pressure) * 0.02;
     mem.flow += (FLOW_BASE - mem.flow) * 0.04;
   }
 
+  // Clamp to physical ranges
   if (status === "active") {
     mem.temperature = clamp(mem.temperature, 80, 86);
     mem.vibration   = clamp(mem.vibration, 2.8, 3.6);
@@ -473,15 +479,16 @@ function generateCompressorData(id) {
     mem.flow        = clamp(mem.flow, 105, 125);
   }
 
-  let temperature = mem.temperature;
-  let vibration = mem.vibration;
-  let pressure = mem.pressure;
-  let flow = mem.flow;
+  const temperature = mem.temperature;
+  const vibration = mem.vibration;
+  const pressure = mem.pressure;
+  const flow = mem.flow;
 
+  // ---------------- WARNING EVALUATION ----------------
   let warning = "normal";
   let event_type = "normal";
 
-  if (status === "active" || status === "inactive") {
+  if (status !== "offline") {
     const readings = {
       temperature,
       vibration,
@@ -490,13 +497,15 @@ function generateCompressorData(id) {
       status,
       compressor_id: id
     };
-    const nextWarningState = evaluateWarning(readings, mem.warningState);
-    mem.warningState = nextWarningState;
 
-    warning = nextWarningState.warning;
-    event_type = nextWarningState.event_type;
+    const next = evaluateWarning(readings, mem.warningState);
+    mem.warningState = next;
+
+    warning = next.warning;
+    event_type = next.event_type;
   }
 
+  // ---------------- RISK SCORE ----------------
   let risk_score = 0;
 
   if (status === "active") {
@@ -513,23 +522,22 @@ function generateCompressorData(id) {
 
     if (warning === "medium") risk_score += 1.5;
     if (warning === "high") risk_score += 3.5;
-  } else if (status === "inactive") {
-    if (warning === "normal") {
-      risk_score = 0.3 + Math.random() * 1.2;
-    } else if (warning === "medium") {
-      risk_score = 2.0 + Math.random() * 2.0;
-    } else if (warning === "high") {
-      risk_score = 3.5 + Math.random() * 1.5;
-    }
   }
 
-  if (id === "compressor_5") {
-    if (warning === "high") warning = "medium";
-    risk_score = Math.min(risk_score, 4.0);
+  if (status === "inactive") {
+    if (warning === "normal") risk_score = 0.3 + Math.random() * 1.2;
+    if (warning === "medium") risk_score = 2 + Math.random() * 2;
+    if (warning === "high") risk_score = 3.5 + Math.random() * 1.5;
+  }
+
+  // C5 never high
+  if (id === "compressor_5" && warning === "high") {
+    warning = "medium";
   }
 
   risk_score = Number(risk_score.toFixed(2));
 
+  // ---------------- AI LOGIC ----------------
   let ai_alert = false;
   let ai_reason = "No AI alert.";
 
@@ -537,16 +545,12 @@ function generateCompressorData(id) {
     if (risk_score > 7.5) {
       ai_alert = true;
       ai_reason = "AI detected high combined risk pattern — early intervention recommended.";
-    } else if (risk_score > 5.0 && warning === "medium") {
+    } else if (risk_score > 5 && warning === "medium") {
       ai_alert = true;
       ai_reason = "AI detected an emerging pattern — parameters drifting toward risk zone.";
     }
 
-    if (
-      warning !== "normal" &&
-      event_type !== "normal" &&
-      event_type !== "none"
-    ) {
+    if (warning !== "normal" && event_type !== "normal") {
       ai_alert = true;
       if (ai_reason === "No AI alert.") {
         ai_reason = `AI confirmed ${event_type} deviation and recommends preventive action.`;
@@ -558,59 +562,35 @@ function generateCompressorData(id) {
     if (
       warning === "medium" &&
       (event_type === "vibration" || event_type === "pressure") &&
-      risk_score >= 3.0
+      risk_score >= 3
     ) {
       ai_alert = true;
-      ai_reason =
-        "AI detected an idle-state trend that could impact reliability on the next startup.";
+      ai_reason = "AI detected an idle-state trend that could impact reliability on the next startup.";
     } else {
       ai_alert = false;
       ai_reason = "No AI alert (idle-state behavior within acceptable range).";
     }
   }
 
+  // Prevent false high warnings
   if (status === "active" && warning === "high") {
-    const clearlyAbnormal =
+    const abnormal =
       temperature > 88 ||
-      vibration > 4.0 ||
+      vibration > 4 ||
       pressure < 97.5 ||
       flow < 180;
 
-    if (!clearlyAbnormal || risk_score < 8.0) {
+    if (!abnormal || risk_score < 8) {
       warning = "medium";
     }
   }
 
+  // AI early detection → medium warning
   if (status === "active" && ai_alert && warning === "normal") {
     warning = "medium";
-
-    const tempDev = Math.max(0, temperature - 81);
-    const vibDev = Math.max(0, vibration - 3.2);
-    const pressDev = Math.max(0, 100.5 - pressure);
-    const flowDev = Math.max(0, 195 - flow);
-
-    const contributions = [
-      { type: "temperature", value: tempDev * 0.35 },
-      { type: "vibration", value: vibDev * 0.35 },
-      { type: "pressure", value: pressDev * 0.15 },
-      { type: "flow", value: flowDev * 0.25 }
-    ].sort((a, b) => b.value - a.value);
-
-    const top = contributions[0]?.type || "multi-parameter";
-
-    if (top === "temperature") {
-      ai_reason = "AI early detection: subtle overheating trend detected before it becomes critical.";
-    } else if (top === "vibration") {
-      ai_reason = "AI early detection: vibration pattern indicates early mechanical wear.";
-    } else if (top === "pressure") {
-      ai_reason = "AI early detection: pressure behavior suggests process instability.";
-    } else if (top === "flow") {
-      ai_reason = "AI early detection: flow pattern indicates early capacity loss.";
-    } else {
-      ai_reason = "AI early detection: multi-parameter deviation detected.";
-    }
   }
 
+  // ---------------- INSIGHTS ----------------
   const { message, manager, engineer, maintenance } =
     buildInsights({
       status,
@@ -642,7 +622,6 @@ function generateCompressorData(id) {
     insights_maintenance: maintenance
   };
 }
-
 // ---------------- HELPERS ----------------
 function weightedChoice(items, weights) {
   const total = weights.reduce((a, b) => a + b, 0);
@@ -669,14 +648,18 @@ function buildTrendObservations({ status, temperature, vibration, pressure, flow
 
     if (flow < 192) notes.push("flow approaching lower bound of normal");
     else if (flow > 208) notes.push("flow near upper bound of normal");
-  } else if (status === "inactive") {
+  }
+
+  else if (status === "inactive") {
     if (temperature > 77.5) notes.push("temperature slightly elevated during idle state");
     if (vibration > 2.1) notes.push("vibration higher than expected for idle operation");
     if (pressure < 99.0) notes.push("pressure slightly below expected idle baseline");
     else if (pressure > 100.3) notes.push("pressure slightly above expected idle baseline");
     if (flow < 110) notes.push("flow slightly low for idle state");
     else if (flow > 122) notes.push("flow slightly high for idle state");
-  } else if (status === "offline") {
+  }
+
+  else if (status === "offline") {
     notes.push("baseline conditions assumed stable while unit is offline");
   }
 
@@ -764,7 +747,12 @@ function buildInsights(ctx) {
     };
   }
 
-  return { message: observations, manager: observations, engineer: observations, maintenance: observations };
+  return {
+    message: observations,
+    manager: observations,
+    engineer: observations,
+    maintenance: observations
+  };
 }
 
 // ---------------- API ENDPOINTS ----------------
