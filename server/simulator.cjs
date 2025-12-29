@@ -1,5 +1,5 @@
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
-// Final tuned version for demo:
+// Demo-tuned version:
 // - C1–C4 active, stable
 // - C5 always inactive (cooler, quieter, low flow)
 // - C6 always offline
@@ -93,11 +93,11 @@ async function checkInactivity() {
 // Inactive: temperature ~74–78, vibration ~1.6–2.2, pressure ~99–100.5, flow ~105–125
 // Balanced variation: thresholds tuned so each parameter can occasionally trigger medium warnings.
 const warningThresholds = {
-  // lowered a bit so active can reach them
-  temperature: { medium: 84.5, high: 88.5, min: 70, max: 100 },
-  vibration:   { medium: 3.2,  high: 3.9,  min: 0,  max: 6 },
-  pressureLow: { medium: 99.5, high: 97.5, min: 90, max: 105 },
-  flowLow:     { medium: 193,  high: 178,  min: 120, max: 240 }
+  // slightly more sensitive so active can reach them more often
+  temperature: { medium: 84.2, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.15, high: 3.9,  min: 0,  max: 6 },
+  pressureLow: { medium: 99.7, high: 97.5, min: 90, max: 105 },
+  flowLow:     { medium: 195,  high: 178,  min: 120, max: 240 }
 };
 
 function normalizeScore(value, type) {
@@ -273,7 +273,6 @@ const compressorMemory = {
   compressor_5: {
     temperature: 75,
     vibration: 1.8,
-    // raised baseline so it doesn't start below pressure threshold
     pressure: 99.5,
     flow: 115,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
@@ -447,7 +446,6 @@ function generateCompressorData(id) {
     const VIB_BASE_ACTIVE = 2.9;
     const VIB_BASE_INACTIVE = 1.9;
     const PRESS_BASE_ACTIVE = 100.5;
-    // raised inactive base so it lives above medium threshold at start
     const PRESS_BASE_INACTIVE = 99.5;
     const FLOW_BASE_ACTIVE = 200;
     const FLOW_BASE_INACTIVE = 115;
@@ -471,7 +469,6 @@ function generateCompressorData(id) {
   } else if (status === "inactive") {
     mem.temperature = clamp(mem.temperature, 74, 78);
     mem.vibration   = clamp(mem.vibration, 1.6, 2.2);
-    // clamp inactive pressure in a safe idle band above high-risk zone
     mem.pressure    = clamp(mem.pressure, 99, 100.5);
     mem.flow        = clamp(mem.flow, 105, 125);
   }
