@@ -1,14 +1,6 @@
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
-// Demo-tuned version:
-// - C1–C4 active, stable
-// - C5 always inactive (cooler, quieter, low flow)
-// - C6 always offline
-// - No warnings at startup
-// - Balanced variation: temp, vib, pressure, flow can each trigger occasional medium warnings
-// - High warnings very rare
-// - 20s warning lock
-// - Active → offline almost never
-// - Firebase structure unchanged
+// Demo‑tuned version with bias‑drift enhancement (added in later chunks)
+// High‑warning logic unchanged, Firebase unchanged, structure unchanged.
 
 const express = require("express");
 const cors = require("cors");
@@ -88,18 +80,19 @@ async function checkInactivity() {
   return diff > TEN_MINUTES;
 }
 
-// ---------------- WARNING THRESHOLDS + SCORING ----------------
-// Updated thresholds for better variation:
-// - Temperature medium: 83.9
-// - Vibration medium: 3.25
-// - Flow medium: 197
-// - Pressure medium: 99.7
+// ---------------- UPDATED WARNING THRESHOLDS ----------------
+// These are the improved thresholds we agreed on:
+// - Temperature medium: 83.3
+// - Vibration medium: 3.30
+// - Flow medium: 199
+// - Pressure medium: 100.0
+// High thresholds unchanged.
 
 const warningThresholds = {
-  temperature: { medium: 83.9, high: 88.5, min: 70, max: 100 },
-  vibration:   { medium: 3.25, high: 3.9, min: 0, max: 6 },
-  pressureLow: { medium: 99.7, high: 97.5, min: 90, max: 105 },
-  flowLow:     { medium: 197, high: 178, min: 120, max: 240 }
+  temperature: { medium: 83.3, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.30, high: 3.9, min: 0, max: 6 },
+  pressureLow: { medium: 100.0, high: 97.5, min: 90, max: 105 },
+  flowLow:     { medium: 199, high: 178, min: 120, max: 240 }
 };
 
 function normalizeScore(value, type) {
@@ -229,7 +222,7 @@ function evaluateWarning(readings, currentWarningState) {
   };
 }
 
-// ---------------- MEMORY FOR DRIFT + STATUS + WARNING STATE ----------------
+// ---------------- MEMORY FOR DRIFT + STATUS + WARNING STATE + BIAS ----------------
 const compressorMemory = {
   compressor_1: {
     temperature: 81,
@@ -237,6 +230,8 @@ const compressorMemory = {
     pressure: 100.5,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "active",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
@@ -247,6 +242,8 @@ const compressorMemory = {
     pressure: 100.5,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "active",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
@@ -257,6 +254,8 @@ const compressorMemory = {
     pressure: 100.5,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "active",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
@@ -267,6 +266,8 @@ const compressorMemory = {
     pressure: 100.5,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "active",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
@@ -277,6 +278,8 @@ const compressorMemory = {
     pressure: 99.5,
     flow: 115,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "inactive",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
@@ -287,11 +290,28 @@ const compressorMemory = {
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now(),
     state: "offline",
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   }
 };
+
+// ---------------- BIAS UPDATE LOGIC ----------------
+function updateBias(mem) {
+  const now = Date.now();
+  const BIAS_FLIP_MS = 3 * 60 * 1000; // every ~3 minutes
+
+  if (now - mem.biasLastFlip > BIAS_FLIP_MS) {
+    mem.biasLastFlip = now;
+
+    mem.bias.temp  = (Math.random() - 0.5) * 0.06;  // ±0.03
+    mem.bias.vib   = (Math.random() - 0.5) * 0.03;  // ±0.015
+    mem.bias.press = (Math.random() - 0.5) * 0.03;  // ±0.015
+    mem.bias.flow  = (Math.random() - 0.5) * 0.12;  // ±0.06
+  }
+}
 
 // ---------------- STATUS TRANSITION LOGIC ----------------
 function chooseStatus(id) {
@@ -302,9 +322,9 @@ function chooseStatus(id) {
   if (id === "compressor_5") return "inactive";
   if (id === "compressor_6") return "offline";
 
-  const MIN_ACTIVE = 20 * 60 * 1000;   // 20 minutes
-  const MIN_INACTIVE = 5 * 60 * 1000;  // 5 minutes
-  const MIN_OFFLINE = 20 * 60 * 1000;  // 20 minutes
+  const MIN_ACTIVE = 20 * 60 * 1000;
+  const MIN_INACTIVE = 5 * 60 * 1000;
+  const MIN_OFFLINE = 20 * 60 * 1000;
 
   let current = mem.state;
 
@@ -387,6 +407,9 @@ function clamp(v, min, max) {
 function generateCompressorData(id) {
   const mem = compressorMemory[id];
 
+  // NEW: bias update
+  updateBias(mem);
+
   let status = chooseStatus(id);
 
   if (status !== mem.state) {
@@ -416,7 +439,7 @@ function generateCompressorData(id) {
     };
   }
 
-  // ---------------- DRIFT ENGINE ----------------
+  // ---------------- DRIFT ENGINE WITH BIAS ----------------
   const updateTrend = (key, scale) => {
     mem.trend[key] = mem.trend[key] * 0.85 + (Math.random() - 0.5) * scale;
   };
@@ -433,12 +456,12 @@ function generateCompressorData(id) {
     updateTrend("flow", 0.01);
   }
 
-  // Apply drift
+  // Apply drift + NEW bias
   if (status === "active" || status === "inactive") {
-    mem.temperature += mem.trend.temp;
-    mem.vibration += mem.trend.vib;
-    mem.pressure += mem.trend.press;
-    mem.flow += mem.trend.flow;
+    mem.temperature += mem.trend.temp + mem.bias.temp;
+    mem.vibration   += mem.trend.vib  + mem.bias.vib;
+    mem.pressure    += mem.trend.press + mem.bias.press;
+    mem.flow        += mem.trend.flow + mem.bias.flow;
 
     // Cross‑coupling
     mem.vibration += mem.trend.temp * 0.03;
@@ -459,7 +482,7 @@ function generateCompressorData(id) {
     const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
     const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
 
-    // Pull toward baseline
+    // Mean reversion
     mem.temperature += (TEMP_BASE - mem.temperature) * 0.02;
     mem.vibration += (VIB_BASE - mem.vibration) * 0.02;
     mem.pressure += (PRESS_BASE - mem.pressure) * 0.02;
