@@ -411,21 +411,19 @@ function generateCompressorData(id) {
 
   updateBias(mem);
 // ---------------- DEMO DRIVER: FORCE PERIODIC WARNINGS ----------------
-  const now = Date.now();
+const now = Date.now();
 
-  if (id === "compressor_1" && status === "active") {
-    // Every ~3 minutes, push readings into warning zone for a short period
-    const cycleMs = 3 * 60 * 1000; // 3 minutes
-    const phase = now % cycleMs;
+if (id === "compressor_1") {
+  const cycleMs = 3 * 60 * 1000; // 3 minutes
+  const phase = now % cycleMs;
 
-    if (phase < 20 * 1000) { // first 20 seconds of each cycle
-      // Push values into medium / near-high territory
-      mem.temperature = Math.max(mem.temperature, 84.0);
-      mem.vibration   = Math.max(mem.vibration, 3.35);
-      mem.pressure    = Math.min(mem.pressure, 99.5);
-      mem.flow        = Math.min(mem.flow, 197);
-    }
+  if (phase < 20 * 1000) {
+    mem.temperature = Math.max(mem.temperature, 84.0);
+    mem.vibration   = Math.max(mem.vibration, 3.35);
+    mem.pressure    = Math.min(mem.pressure, 99.5);
+    mem.flow        = Math.min(mem.flow, 197);
   }
+}
 
   let status = chooseStatus(id);
 
