@@ -1,5 +1,6 @@
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
 // Updated: realistic drift, status transitions, and correct offline/inactive behavior
+// + Threshold-based warning logic with scoring and 30s lock
 
 const express = require("express");
 const cors = require("cors");
@@ -79,7 +80,146 @@ async function checkInactivity() {
   return diff > TEN_MINUTES;
 }
 
-// ---------------- MEMORY FOR DRIFT + STATUS ----------------
+// ---------------- WARNING THRESHOLDS + SCORING ----------------
+// These are tuned to your current drift ranges:
+// temperature: 74–95, vibration: 1.5–5.0, pressure: 96–104, flow: 150–230 (active)
+const warningThresholds = {
+  temperature: { medium: 90, high: 93, min: 70, max: 100 },
+  vibration: { medium: 4.2, high: 4.6, min: 0, max: 6 },
+  pressureLow: { medium: 97, high: 96, min: 90, max: 105 },
+  flowLow: { medium: 170, high: 160, min: 120, max: 240 }
+};
+
+// Normalize score 0–1 based on how far into the warning band we are
+function normalizeScore(value, type) {
+  const t = warningThresholds[type];
+
+  if (!t) return 0;
+
+  // Temperature: higher is worse
+  if (type === "temperature") {
+    if (value < t.medium) return 0;
+    return Math.min((value - t.medium) / (t.high - t.medium), 1);
+  }
+
+  // Vibration: higher is worse
+  if (type === "vibration") {
+    if (value < t.medium) return 0;
+    return Math.min((value - t.medium) / (t.high - t.medium), 1);
+  }
+
+  // PressureLow: lower is worse
+  if (type === "pressureLow") {
+    if (value > t.medium) return 0;
+    return Math.min((t.medium - value) / (t.medium - t.high), 1);
+  }
+
+  // FlowLow: lower is worse
+  if (type === "flowLow") {
+    if (value > t.medium) return 0;
+    return Math.min((t.medium - value) / (t.medium - t.high), 1);
+  }
+
+  return 0;
+}
+
+function getSeverity(value, type) {
+  const t = warningThresholds[type];
+  if (!t) return "normal";
+
+  if (type === "temperature" || type === "vibration") {
+    if (value >= t.high) return "high";
+    if (value >= t.medium) return "medium";
+    return "normal";
+  }
+
+  if (type === "pressureLow" || type === "flowLow") {
+    if (value <= t.high) return "high";
+    if (value <= t.medium) return "medium";
+    return "normal";
+  }
+
+  return "normal";
+}
+
+// Evaluate warning with 30s lock + high override
+function evaluateWarning(readings, currentWarningState) {
+  const now = Date.now();
+
+  // readings: { temperature, vibration, pressure, flow }
+  const { temperature, vibration, pressure, flow } = readings;
+
+  // Map to logical warning types
+  const candidates = [
+    {
+      key: "temperature",
+      severity: getSeverity(temperature, "temperature"),
+      score: normalizeScore(temperature, "temperature"),
+      event_type: "overheating"
+    },
+    {
+      key: "vibration",
+      severity: getSeverity(vibration, "vibration"),
+      score: normalizeScore(vibration, "vibration"),
+      event_type: "vibration"
+    },
+    {
+      key: "pressureLow",
+      severity: getSeverity(pressure, "pressureLow"),
+      score: normalizeScore(pressure, "pressureLow"),
+      event_type: "pressure"
+    },
+    {
+      key: "flowLow",
+      severity: getSeverity(flow, "flowLow"),
+      score: normalizeScore(flow, "flowLow"),
+      event_type: "low_flow"
+    }
+  ];
+
+  // 1) High warnings override immediately
+  const highCandidates = candidates.filter(c => c.severity === "high" && c.score > 0);
+  if (highCandidates.length > 0) {
+    highCandidates.sort((a, b) => b.score - a.score);
+    const best = highCandidates[0];
+    return {
+      warning: "high",
+      event_type: best.event_type,
+      startTime: now
+    };
+  }
+
+  // 2) If we are inside lock period, keep current warning
+  if (
+    currentWarningState &&
+    currentWarningState.warning !== "normal" &&
+    now - currentWarningState.startTime < 30000
+  ) {
+    return currentWarningState;
+  }
+
+  // 3) After lock ends, evaluate medium warnings
+  const mediumCandidates = candidates.filter(c => c.severity === "medium" && c.score > 0);
+
+  if (mediumCandidates.length === 0) {
+    return {
+      warning: "normal",
+      event_type: "normal",
+      startTime: now
+    };
+  }
+
+  mediumCandidates.sort((a, b) => b.score - a.score);
+  const bestMedium = mediumCandidates[0];
+
+  return {
+    warning: "medium",
+    event_type: bestMedium.event_type,
+    startTime: now
+  };
+}
+
+// ---------------- MEMORY FOR DRIFT + STATUS + WARNING STATE ----------------
 const compressorMemory = {
   compressor_1: {
     temperature: 78,
@@ -88,7 +228,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "active",
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_2: {
     temperature: 78,
@@ -97,7 +238,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "active",
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_3: {
     temperature: 78,
@@ -106,7 +248,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "active",
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_4: {
     temperature: 78,
@@ -115,7 +258,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "active",
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_5: {
     temperature: 78,
@@ -124,7 +268,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "inactive", // fixed idle unit
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_6: {
     temperature: 78,
@@ -133,7 +278,8 @@ const compressorMemory = {
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "offline", // fixed offline unit
-    lastChange: Date.now()
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   }
 };
 
@@ -142,6 +288,10 @@ function chooseStatus(id) {
   const mem = compressorMemory[id];
   const now = Date.now();
   const elapsed = now - mem.lastChange;
+
+  // FIXED STATES
+  if (id === "compressor_5") return "inactive";
+  if (id === "compressor_6") return "offline";
 
   const MIN_ACTIVE = 30000;   // 30s
   const MIN_INACTIVE = 20000; // 20s
@@ -154,24 +304,24 @@ function chooseStatus(id) {
   if (current === "inactive" && elapsed < MIN_INACTIVE) return current;
   if (current === "offline" && elapsed < MIN_OFFLINE) return current;
 
-  // After minimum time, allow transitions
+  // Realistic transition probabilities (very stable)
   const r = Math.random();
 
   if (current === "active") {
-    if (r < 0.90) return "active";
-    if (r < 0.97) return "inactive";
-    return "offline";
+    if (r < 0.985) return "active";     // 98.5% stay active
+    if (r < 0.995) return "inactive";   // 1% chance
+    return "offline";                   // 0.5% chance
   }
 
   if (current === "inactive") {
-    if (r < 0.70) return "inactive";
-    if (r < 0.95) return "active";
-    return "offline";
+    if (r < 0.92) return "inactive";    // 92% stay inactive
+    if (r < 0.985) return "active";     // 6.5% chance
+    return "offline";                   // 1.5% chance
   }
 
   if (current === "offline") {
-    if (r < 0.85) return "offline";
-    return "inactive"; // offline → inactive first
+    if (r < 0.98) return "offline";     // 98% stay offline
+    return "inactive";                  // 2% chance
   }
 
   return current;
@@ -318,48 +468,17 @@ function generateCompressorData(id) {
   let pressure = mem.pressure;
   let flow = mem.flow;
 
-  // 4) WARNING + EVENT TYPE
+  // 4) WARNING + EVENT TYPE via new logic
   let warning = "normal";
   let event_type = "normal";
 
-  if (status === "active") {
-    // thresholds based on drifted values
-    if (temperature > 90 || vibration > 4.2 || pressure < 97 || flow < 170) {
-      warning = "medium";
-      event_type = weightedChoice(
-        ["vibration", "pressure", "low_flow", "overheating"],
-        [3, 3, 2, 2]
-      );
+  if (status === "active" || status === "inactive") {
+    const readings = { temperature, vibration, pressure, flow };
+    const nextWarningState = evaluateWarning(readings, mem.warningState);
+    mem.warningState = nextWarningState;
 
-      // HIGH only if clearly bad + rare
-      if (
-        (temperature > 92 || vibration > 4.5 || flow < 160) &&
-        Math.random() < 0.02
-      ) {
-        warning = "high";
-      }
-    } else {
-      warning = "normal";
-      event_type = "normal";
-    }
-
-    if (warning !== "normal" && event_type === "normal") {
-      const events = ["vibration", "pressure", "low_flow", "overheating"];
-      const weights = [3, 3, 2, 2];
-      event_type = weightedChoice(events, weights);
-    }
-  } else if (status === "inactive") {
-    // sensors online, idle state — rare medium warnings
-    const rWarn = Math.random();
-    if (rWarn < 0.97) {
-      warning = "normal";
-      event_type = "normal";
-    } else {
-      warning = "medium";
-      const events = ["vibration", "pressure"];
-      const weights = [2, 1];
-      event_type = weightedChoice(events, weights);
-    }
+    warning = nextWarningState.warning;
+    event_type = nextWarningState.event_type;
   }
 
   // 5) RISK SCORE
@@ -384,6 +503,8 @@ function generateCompressorData(id) {
       risk_score = 0.5 + Math.random() * 2.0;
     } else if (warning === "medium") {
       risk_score = 3.0 + Math.random() * 3.0;
+    } else if (warning === "high") {
+      risk_score = 5.0 + Math.random() * 3.0;
     }
   }
 
@@ -424,7 +545,7 @@ function generateCompressorData(id) {
     }
   }
 
-  // 7) HIGH WARNING sanity check
+  // 7) HIGH WARNING sanity check (active only)
   if (status === "active" && warning === "high") {
     const clearlyAbnormal =
       temperature > 82 ||
