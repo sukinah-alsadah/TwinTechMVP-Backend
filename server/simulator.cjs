@@ -618,7 +618,19 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/latest", (req, res) => {
+  // Wake simulator when UI requests data
+  db.ref("simulator/isRunning").set(true);
+
+  // Update lastActive so auto-stop knows UI is alive
+  db.ref("simulator/lastActive").set(Date.now());
+
   res.json(latestBatch);
+});
+
+// Heartbeat endpoint for UI activity
+app.post("/api/heartbeat", (req, res) => {
+  db.ref("simulator/lastActive").set(Date.now());
+  res.json({ ok: true });
 });
 
 // ---------------- SERVER START ----------------
