@@ -1,6 +1,7 @@
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
 // Updated: realistic drift, status transitions, and correct offline/inactive behavior
 // + Threshold-based warning logic with scoring and 30s lock
+// + Tuned for AI/ML-style early detection and prevention (rare high warnings)
 
 const express = require("express");
 const cors = require("cors");
@@ -81,13 +82,14 @@ async function checkInactivity() {
 }
 
 // ---------------- WARNING THRESHOLDS + SCORING ----------------
-// These are tuned to your current drift ranges:
-// temperature: 74–95, vibration: 1.5–5.0, pressure: 96–104, flow: 150–230 (active)
+// Tuned for calmer, more realistic behavior:
+// Active: temperature ~78–86, vibration ~2.5–3.8, pressure ~98–102, flow ~185–215
+// Inactive: temperature ~76–82, vibration ~1.8–2.8, pressure ~98–101, flow ~110–135
 const warningThresholds = {
-  temperature: { medium: 90, high: 93, min: 70, max: 100 },
-  vibration: { medium: 4.2, high: 4.6, min: 0, max: 6 },
-  pressureLow: { medium: 97, high: 96, min: 90, max: 105 },
-  flowLow: { medium: 170, high: 160, min: 120, max: 240 }
+  temperature: { medium: 86, high: 89, min: 70, max: 100 },
+  vibration: { medium: 3.6, high: 3.9, min: 0, max: 6 },
+  pressureLow: { medium: 98, high: 97, min: 90, max: 105 },
+  flowLow: { medium: 182, high: 176, min: 120, max: 240 }
 };
 
 // Normalize score 0–1 based on how far into the warning band we are
@@ -146,8 +148,8 @@ function getSeverity(value, type) {
 function evaluateWarning(readings, currentWarningState) {
   const now = Date.now();
 
-  // readings: { temperature, vibration, pressure, flow }
-  const { temperature, vibration, pressure, flow } = readings;
+  // readings: { temperature, vibration, pressure, flow, status, compressor_id }
+  const { temperature, vibration, pressure, flow, status, compressor_id } = readings;
 
   // Map to logical warning types
   const candidates = [
@@ -177,8 +179,19 @@ function evaluateWarning(readings, currentWarningState) {
     }
   ];
 
-  // 1) High warnings override immediately
-  const highCandidates = candidates.filter(c => c.severity === "high" && c.score > 0);
+  // Inactive compressors (especially C5) should never jump to high.
+  // We treat them as "early trend only" — medium at most.
+  const isInactive = status === "inactive";
+  const isFixedInactive = compressor_id === "compressor_5";
+
+  // 1) High warnings override immediately — but only for active units
+  let highCandidates = candidates.filter(c => c.severity === "high" && c.score > 0);
+
+  if (isInactive || isFixedInactive) {
+    // For inactive units, downgrade high to medium-level behavior
+    highCandidates = [];
+  }
+
   if (highCandidates.length > 0) {
     highCandidates.sort((a, b) => b.score - a.score);
     const best = highCandidates[0];
@@ -199,7 +212,12 @@ function evaluateWarning(readings, currentWarningState) {
   }
 
   // 3) After lock ends, evaluate medium warnings
-  const mediumCandidates = candidates.filter(c => c.severity === "medium" && c.score > 0);
+  let mediumCandidates = candidates.filter(c => c.severity === "medium" && c.score > 0);
+
+  // For inactive units, medium warnings should be rare and only for clear deviations
+  if (isInactive || isFixedInactive) {
+    mediumCandidates = mediumCandidates.filter(c => c.score > 0.4);
+  }
 
   if (mediumCandidates.length === 0) {
     return {
@@ -222,8 +240,8 @@ function evaluateWarning(readings, currentWarningState) {
 // ---------------- MEMORY FOR DRIFT + STATUS + WARNING STATE ----------------
 const compressorMemory = {
   compressor_1: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 80,
+    vibration: 3.0,
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
@@ -232,8 +250,8 @@ const compressorMemory = {
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_2: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 80,
+    vibration: 3.0,
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
@@ -242,18 +260,18 @@ const compressorMemory = {
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_3: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 80,
+    vibration: 3.0,
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    state: "active",
+    state: "active", // logical state, but we will override to offline in generator
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_4: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 80,
+    vibration: 3.0,
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
@@ -262,18 +280,18 @@ const compressorMemory = {
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_5: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 79,
+    vibration: 2.2,
     pressure: 100,
-    flow: 200,
+    flow: 120,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
     state: "inactive", // fixed idle unit
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
   compressor_6: {
-    temperature: 78,
-    vibration: 2.8,
+    temperature: 80,
+    vibration: 3.0,
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
@@ -290,12 +308,14 @@ function chooseStatus(id) {
   const elapsed = now - mem.lastChange;
 
   // FIXED STATES
-  if (id === "compressor_5") return "inactive";
-  if (id === "compressor_6") return "offline";
+  if (id === "compressor_5") return "inactive"; // always inactive
+  if (id === "compressor_6") return "offline";  // always offline
 
-  const MIN_ACTIVE = 30000;   // 30s
-  const MIN_INACTIVE = 20000; // 20s
-  const MIN_OFFLINE = 60000;  // 60s
+  // C3 is conceptually "active device but offline in UI" — we will handle offline in generator.
+  // For status logic, treat 1–4 as active machines with very stable behavior.
+  const MIN_ACTIVE = 120000;   // 2 minutes
+  const MIN_INACTIVE = 60000;  // 1 minute
+  const MIN_OFFLINE = 300000;  // 5 minutes
 
   let current = mem.state;
 
@@ -308,20 +328,20 @@ function chooseStatus(id) {
   const r = Math.random();
 
   if (current === "active") {
-    if (r < 0.985) return "active";     // 98.5% stay active
-    if (r < 0.995) return "inactive";   // 1% chance
-    return "offline";                   // 0.5% chance
+    if (r < 0.995) return "active";     // 99.5% stay active
+    if (r < 0.998) return "inactive";   // 0.3% chance
+    return "offline";                   // 0.2% chance
   }
 
   if (current === "inactive") {
-    if (r < 0.92) return "inactive";    // 92% stay inactive
-    if (r < 0.985) return "active";     // 6.5% chance
+    if (r < 0.94) return "inactive";    // 94% stay inactive
+    if (r < 0.985) return "active";     // 4.5% chance
     return "offline";                   // 1.5% chance
   }
 
   if (current === "offline") {
-    if (r < 0.98) return "offline";     // 98% stay offline
-    return "inactive";                  // 2% chance
+    if (r < 0.985) return "offline";    // 98.5% stay offline
+    return "inactive";                  // 1.5% chance
   }
 
   return current;
@@ -379,6 +399,13 @@ function generateCompressorData(id) {
 
   // 1) STATUS: choose realistic state
   let status = chooseStatus(id);
+
+  // Hard overrides for your storytelling:
+  // C3: always offline in UI (digital twin sees it but no telemetry)
+  if (id === "compressor_3") {
+    status = "offline";
+  }
+
   if (status !== mem.state) {
     mem.state = status;
     mem.lastChange = Date.now();
@@ -411,21 +438,21 @@ function generateCompressorData(id) {
   // trend update helper (smooth, directional)
   const updateTrend = (trendKey, baseScale) => {
     mem.trend[trendKey] =
-      mem.trend[trendKey] * 0.8 + (Math.random() - 0.5) * baseScale;
+      mem.trend[trendKey] * 0.85 + (Math.random() - 0.5) * baseScale;
   };
 
   if (status === "active") {
-    // stronger trends
-    updateTrend("temp", 0.08);
-    updateTrend("vib", 0.04);
-    updateTrend("press", 0.03);
-    updateTrend("flow", 0.15);
+    // very gentle trends
+    updateTrend("temp", 0.04);
+    updateTrend("vib", 0.02);
+    updateTrend("press", 0.015);
+    updateTrend("flow", 0.08);
   } else if (status === "inactive") {
-    // very slow trends
-    updateTrend("temp", 0.03);
-    updateTrend("vib", 0.015);
-    updateTrend("press", 0.01);
-    updateTrend("flow", 0.05);
+    // extremely slow trends
+    updateTrend("temp", 0.015);
+    updateTrend("vib", 0.01);
+    updateTrend("press", 0.008);
+    updateTrend("flow", 0.03);
   }
 
   // apply trend-based drift
@@ -436,31 +463,42 @@ function generateCompressorData(id) {
     mem.flow += mem.trend.flow;
 
     // correlation: hotter → slightly more vibration
-    mem.vibration += mem.trend.temp * 0.05;
+    mem.vibration += mem.trend.temp * 0.04;
 
     // correlation: flow drop → pressure drop
-    mem.pressure += mem.trend.flow * -0.03;
+    mem.pressure += mem.trend.flow * -0.025;
 
     // baseline pull (stability)
-    const TEMP_BASE = 80;
-    const VIB_BASE = 3.0;
+    const TEMP_BASE_ACTIVE = 80;
+    const TEMP_BASE_INACTIVE = 79;
+    const VIB_BASE_ACTIVE = 3.0;
+    const VIB_BASE_INACTIVE = 2.2;
     const PRESS_BASE = 100;
-    const FLOW_BASE = status === "active" ? 200 : 125;
+    const FLOW_BASE_ACTIVE = 200;
+    const FLOW_BASE_INACTIVE = 120;
 
-    mem.temperature += (TEMP_BASE - mem.temperature) * 0.01;
-    mem.vibration += (VIB_BASE - mem.vibration) * 0.01;
-    mem.pressure += (PRESS_BASE - mem.pressure) * 0.01;
-    mem.flow += (FLOW_BASE - mem.flow) * 0.02;
+    const TEMP_BASE = status === "active" ? TEMP_BASE_ACTIVE : TEMP_BASE_INACTIVE;
+    const VIB_BASE = status === "active" ? VIB_BASE_ACTIVE : VIB_BASE_INACTIVE;
+    const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
+
+    mem.temperature += (TEMP_BASE - mem.temperature) * 0.02;
+    mem.vibration += (VIB_BASE - mem.vibration) * 0.02;
+    mem.pressure += (PRESS_BASE - mem.pressure) * 0.02;
+    mem.flow += (FLOW_BASE - mem.flow) * 0.04;
   }
 
   // clamp realistic ranges
-  mem.temperature = Math.min(Math.max(mem.temperature, 74), 95);
-  mem.vibration = Math.min(Math.max(mem.vibration, 1.5), 5.0);
-  mem.pressure = Math.min(Math.max(mem.pressure, 96), 104);
-  mem.flow = Math.min(
-    Math.max(mem.flow, status === "active" ? 150 : 100),
-    status === "active" ? 230 : 150
-  );
+  if (status === "active") {
+    mem.temperature = Math.min(Math.max(mem.temperature, 78), 86);
+    mem.vibration = Math.min(Math.max(mem.vibration, 2.5), 3.8);
+    mem.pressure = Math.min(Math.max(mem.pressure, 98), 102);
+    mem.flow = Math.min(Math.max(mem.flow, 185), 215);
+  } else if (status === "inactive") {
+    mem.temperature = Math.min(Math.max(mem.temperature, 76), 82);
+    mem.vibration = Math.min(Math.max(mem.vibration, 1.8), 2.8);
+    mem.pressure = Math.min(Math.max(mem.pressure, 98), 101);
+    mem.flow = Math.min(Math.max(mem.flow, 110), 135);
+  }
 
   // assign final values
   let temperature = mem.temperature;
@@ -473,7 +511,14 @@ function generateCompressorData(id) {
   let event_type = "normal";
 
   if (status === "active" || status === "inactive") {
-    const readings = { temperature, vibration, pressure, flow };
+    const readings = {
+      temperature,
+      vibration,
+      pressure,
+      flow,
+      status,
+      compressor_id: id
+    };
     const nextWarningState = evaluateWarning(readings, mem.warningState);
     mem.warningState = nextWarningState;
 
@@ -486,26 +531,34 @@ function generateCompressorData(id) {
 
   if (status === "active") {
     const tempDev = Math.max(0, temperature - 80);
-    const vibDev = Math.max(0, vibration - 4.0);
+    const vibDev = Math.max(0, vibration - 3.4);
     const pressDev = Math.max(0, 100 - pressure);
-    const flowDev = Math.max(0, 200 - flow);
+    const flowDev = Math.max(0, 195 - flow);
 
     risk_score =
-      tempDev * 0.3 +
-      vibDev * 0.3 +
-      pressDev * 0.2 +
-      flowDev * 0.3;
+      tempDev * 0.35 +
+      vibDev * 0.35 +
+      pressDev * 0.15 +
+      flowDev * 0.25;
 
-    if (warning === "medium") risk_score += 2;
-    if (warning === "high") risk_score += 4;
+    if (warning === "medium") risk_score += 1.5;
+    if (warning === "high") risk_score += 3.5;
   } else if (status === "inactive") {
+    // Inactive: very low risk, mostly trend-based
     if (warning === "normal") {
-      risk_score = 0.5 + Math.random() * 2.0;
+      risk_score = 0.3 + Math.random() * 1.2;
     } else if (warning === "medium") {
-      risk_score = 3.0 + Math.random() * 3.0;
+      risk_score = 2.0 + Math.random() * 2.0;
     } else if (warning === "high") {
-      risk_score = 5.0 + Math.random() * 3.0;
+      // Should not happen due to earlier logic, but clamp just in case
+      risk_score = 3.5 + Math.random() * 1.5;
     }
+  }
+
+  // Special rule: C5 (fixed inactive) should never look dangerous
+  if (id === "compressor_5") {
+    if (warning === "high") warning = "medium";
+    risk_score = Math.min(risk_score, 4.0);
   }
 
   risk_score = Number(risk_score.toFixed(2));
@@ -515,9 +568,13 @@ function generateCompressorData(id) {
   let ai_reason = "No AI alert.";
 
   if (status === "active") {
-    if (risk_score > 8) {
+    // AI is predictive: focus on medium risk, not only high
+    if (risk_score > 7.5) {
       ai_alert = true;
-      ai_reason = "AI detected high combined risk pattern.";
+      ai_reason = "AI detected high combined risk pattern — early intervention recommended.";
+    } else if (risk_score > 5.0 && warning === "medium") {
+      ai_alert = true;
+      ai_reason = "AI detected an emerging pattern — parameters drifting toward risk zone.";
     }
 
     if (
@@ -526,7 +583,9 @@ function generateCompressorData(id) {
       event_type !== "none"
     ) {
       ai_alert = true;
-      ai_reason = `AI confirmed ${event_type} deviation.`;
+      if (ai_reason === "No AI alert.") {
+        ai_reason = `AI confirmed ${event_type} deviation and recommends preventive action.`;
+      }
     }
   }
 
@@ -534,7 +593,7 @@ function generateCompressorData(id) {
     if (
       warning === "medium" &&
       (event_type === "vibration" || event_type === "pressure") &&
-      risk_score >= 4.0
+      risk_score >= 3.0
     ) {
       ai_alert = true;
       ai_reason =
@@ -548,13 +607,12 @@ function generateCompressorData(id) {
   // 7) HIGH WARNING sanity check (active only)
   if (status === "active" && warning === "high") {
     const clearlyAbnormal =
-      temperature > 82 ||
-      vibration > 4.2 ||
-      pressure < 97 ||
-      pressure > 103 ||
-      flow < 185;
+      temperature > 88 ||
+      vibration > 4.0 ||
+      pressure < 97.5 ||
+      flow < 180;
 
-    if (!clearlyAbnormal) {
+    if (!clearlyAbnormal || risk_score < 8.0) {
       warning = "medium";
     }
   }
@@ -564,21 +622,21 @@ function generateCompressorData(id) {
     warning = "medium";
 
     const tempDev = Math.max(0, temperature - 80);
-    const vibDev = Math.max(0, vibration - 4.0);
+    const vibDev = Math.max(0, vibration - 3.4);
     const pressDev = Math.max(0, 100 - pressure);
-    const flowDev = Math.max(0, 200 - flow);
+    const flowDev = Math.max(0, 195 - flow);
 
     const contributions = [
-      { type: "temperature", value: tempDev * 0.3 },
-      { type: "vibration", value: vibDev * 0.3 },
-      { type: "pressure", value: pressDev * 0.2 },
-      { type: "flow", value: flowDev * 0.3 }
+      { type: "temperature", value: tempDev * 0.35 },
+      { type: "vibration", value: vibDev * 0.35 },
+      { type: "pressure", value: pressDev * 0.15 },
+      { type: "flow", value: flowDev * 0.25 }
     ].sort((a, b) => b.value - a.value);
 
     const top = contributions[0]?.type || "multi-parameter";
 
     if (top === "temperature") {
-      ai_reason = "AI early detection: subtle overheating trend detected.";
+      ai_reason = "AI early detection: subtle overheating trend detected before it becomes critical.";
     } else if (top === "vibration") {
       ai_reason = "AI early detection: vibration pattern indicates early mechanical wear.";
     } else if (top === "pressure") {
@@ -639,24 +697,24 @@ function buildTrendObservations({ status, temperature, vibration, pressure, flow
   const notes = [];
 
   if (status === "active") {
-    if (temperature > 81.5) notes.push("temperature slightly elevated");
-    else if (temperature < 76.5) notes.push("temperature slightly below typical range");
+    if (temperature > 82) notes.push("temperature slightly elevated");
+    else if (temperature < 78) notes.push("temperature slightly below typical range");
 
-    if (vibration > 3.8) notes.push("vibration trending upward");
-    else if (vibration < 2.2) notes.push("vibration lower than usual");
+    if (vibration > 3.5) notes.push("vibration trending upward");
+    else if (vibration < 2.6) notes.push("vibration lower than usual");
 
     if (pressure < 99) notes.push("pressure slightly below baseline");
     else if (pressure > 101.5) notes.push("pressure slightly above baseline");
 
-    if (flow < 195) notes.push("flow approaching lower bound of normal");
+    if (flow < 190) notes.push("flow approaching lower bound of normal");
     else if (flow > 210) notes.push("flow near upper bound of normal");
   } else if (status === "inactive") {
     if (temperature > 81.5) notes.push("temperature slightly elevated during idle state");
-    if (vibration > 3.5) notes.push("vibration higher than expected for idle operation");
-    if (pressure < 98.5) notes.push("pressure slightly below expected idle baseline");
-    else if (pressure > 101.5) notes.push("pressure slightly above expected idle baseline");
+    if (vibration > 2.6) notes.push("vibration higher than expected for idle operation");
+    if (pressure < 99) notes.push("pressure slightly below expected idle baseline");
+    else if (pressure > 101) notes.push("pressure slightly above expected idle baseline");
     if (flow < 115) notes.push("flow slightly low for idle state");
-    else if (flow > 135) notes.push("flow slightly high for idle state");
+    else if (flow > 130) notes.push("flow slightly high for idle state");
   } else if (status === "offline") {
     notes.push("baseline conditions assumed stable while unit is offline");
   }
