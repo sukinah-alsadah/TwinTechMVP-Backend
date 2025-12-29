@@ -1,6 +1,14 @@
 // TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
-// Final tuned version: realistic drift, clear active vs inactive behavior,
-// rare offline transitions, and balanced warning logic with 20s lock.
+// Final tuned version for demo:
+// - C1–C4 active, stable
+// - C5 always inactive (cooler, quieter, low flow)
+// - C6 always offline
+// - No warnings at startup
+// - Balanced variation: temp, vib, pressure, flow can each trigger occasional medium warnings
+// - High warnings very rare
+// - 20s warning lock
+// - Active → offline almost never
+// - Firebase structure unchanged
 
 const express = require("express");
 const cors = require("cors");
@@ -83,11 +91,12 @@ async function checkInactivity() {
 // ---------------- WARNING THRESHOLDS + SCORING ----------------
 // Active: temperature ~80–86, vibration ~2.8–3.6, pressure ~99–102, flow ~190–210
 // Inactive: temperature ~74–78, vibration ~1.6–2.2, pressure ~98–100, flow ~105–125
+// Balanced variation: thresholds tuned so each parameter can occasionally trigger medium warnings.
 const warningThresholds = {
-  temperature: { medium: 86, high: 89, min: 70, max: 100 },
-  vibration:   { medium: 3.5, high: 3.9, min: 0,  max: 6 },
-  pressureLow: { medium: 98.5, high: 97.5, min: 90, max: 105 },
-  flowLow:     { medium: 185, high: 178, min: 120, max: 240 }
+  temperature: { medium: 85.2, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.3,  high: 3.9,  min: 0,  max: 6 },
+  pressureLow: { medium: 99.2, high: 97.5, min: 90, max: 105 },
+  flowLow:     { medium: 188,  high: 178,  min: 120, max: 240 }
 };
 
 function normalizeScore(value, type) {
