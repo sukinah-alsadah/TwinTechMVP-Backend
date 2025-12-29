@@ -1,6 +1,5 @@
-// TwinTech Simulator — 6 Compressors, Dynamic Insights, Firebase + API
-// Demo‑tuned version with bias‑drift enhancement (added in later chunks)
-// High‑warning logic unchanged, Firebase unchanged, structure unchanged.
+// TwinTech Simulator — Stable Version with Bias Drift + Threshold Improvements
+// Chunk 1 / 4 — Imports, Firebase, Express, Thresholds
 
 const express = require("express");
 const cors = require("cors");
@@ -16,14 +15,14 @@ admin.initializeApp({
 
 const db = admin.database();
 
-// ---------------- GRACEFUL SHUTDOWN HANDLER ----------------
+// ---------------- GRACEFUL SHUTDOWN ----------------
 async function gracefulShutdown() {
-  console.log("\n⚠️ Simulator shutting down… closing the gate (isRunning=false)");
+  console.log("\n⚠️ Simulator shutting down… setting isRunning=false");
   try {
     await db.ref("simulator/isRunning").set(false);
-    console.log("✔ Gate closed successfully.");
+    console.log("✔ Simulator stopped cleanly.");
   } catch (err) {
-    console.error("Failed to update Firebase during shutdown:", err);
+    console.error("Shutdown error:", err);
   }
   process.exit(0);
 }
@@ -46,7 +45,6 @@ const COMPRESSORS = [
 
 const TICK_MS = 2000;
 const HISTORY_INTERVAL_MS = 30000;
-const WARNING_LOCK_MS = 20000; // 20 seconds
 
 let latestBatch = [];
 let lastHistorySave = Date.now();
@@ -56,17 +54,15 @@ async function checkIsRunning() {
   const snapshot = await db.ref("simulator/isRunning").once("value");
   const raw = snapshot.val();
 
-  console.log("DEBUG Firebase value =", raw);
-
   if (raw === true) return true;
 
   await db.ref("simulator/isRunning").set(true);
-  console.log("Auto-repair: simulator/isRunning was invalid, reset to TRUE");
+  console.log("Auto-repair: simulator/isRunning reset to TRUE");
 
   return true;
 }
 
-// ---------------- AUTO-STOP INACTIVITY CHECK ----------------
+// ---------------- AUTO-STOP INACTIVITY ----------------
 async function checkInactivity() {
   const snapshot = await db.ref("simulator/lastActive").once("value");
   const lastActive = snapshot.val();
@@ -81,12 +77,7 @@ async function checkInactivity() {
 }
 
 // ---------------- UPDATED WARNING THRESHOLDS ----------------
-// These are the improved thresholds we agreed on:
-// - Temperature medium: 83.3
-// - Vibration medium: 3.30
-// - Flow medium: 199
-// - Pressure medium: 100.0
-// High thresholds unchanged.
+// Improved thresholds for smoother, more realistic warning behavior.
 
 const warningThresholds = {
   temperature: { medium: 83.3, high: 88.5, min: 70, max: 100 },
@@ -140,6 +131,7 @@ function getSeverity(value, type) {
 
   return "normal";
 }
+// ---------------- WARNING EVALUATION ----------------
 function evaluateWarning(readings, currentWarningState) {
   const now = Date.now();
   const { temperature, vibration, pressure, flow, status, compressor_id } = readings;
@@ -222,98 +214,57 @@ function evaluateWarning(readings, currentWarningState) {
   };
 }
 
-// ---------------- MEMORY FOR DRIFT + STATUS + WARNING STATE + BIAS ----------------
+// ---------------- MEMORY WITH RANDOMIZED BIAS FLIP ----------------
+function initMemory(state, temp, vib, press, flow) {
+  return {
+    temperature: temp,
+    vibration: vib,
+    pressure: press,
+    flow: flow,
+    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
+    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
+    biasLastFlip: Date.now() - Math.random() * 90000, // randomize 0–90s
+    state,
+    lastChange: Date.now(),
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
+  };
+}
+
 const compressorMemory = {
-  compressor_1: {
-    temperature: 81,
-    vibration: 2.9,
-    pressure: 100.5,
-    flow: 200,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "active",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  },
-  compressor_2: {
-    temperature: 81,
-    vibration: 2.9,
-    pressure: 100.5,
-    flow: 200,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "active",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  },
-  compressor_3: {
-    temperature: 81,
-    vibration: 2.9,
-    pressure: 100.5,
-    flow: 200,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "active",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  },
-  compressor_4: {
-    temperature: 81,
-    vibration: 2.9,
-    pressure: 100.5,
-    flow: 200,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "active",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  },
-  compressor_5: {
-    temperature: 75,
-    vibration: 1.8,
-    pressure: 99.5,
-    flow: 115,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "inactive",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  },
-  compressor_6: {
-    temperature: 80,
-    vibration: 3.0,
-    pressure: 100,
-    flow: 200,
-    trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    bias: { temp: 0, vib: 0, press: 0, flow: 0 },
-    biasLastFlip: Date.now(),
-    state: "offline",
-    lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
-  }
+  compressor_1: initMemory("active", 81, 2.9, 100.5, 200),
+  compressor_2: initMemory("active", 81, 2.9, 100.5, 200),
+  compressor_3: initMemory("active", 81, 2.9, 100.5, 200),
+  compressor_4: initMemory("active", 81, 2.9, 100.5, 200),
+  compressor_5: initMemory("inactive", 75, 1.8, 99.5, 115),
+  compressor_6: initMemory("offline", 80, 3.0, 100, 200)
 };
 
-// ---------------- BIAS UPDATE LOGIC ----------------
+// ---------------- UPDATED BIAS LOGIC ----------------
 function updateBias(mem) {
   const now = Date.now();
-  const BIAS_FLIP_MS = 3 * 60 * 1000; // every ~3 minutes
+  const BIAS_FLIP_MS = 90 * 1000; // 1.5 minutes
 
   if (now - mem.biasLastFlip > BIAS_FLIP_MS) {
     mem.biasLastFlip = now;
 
-    mem.bias.temp  = (Math.random() - 0.5) * 0.06;  // ±0.03
-    mem.bias.vib   = (Math.random() - 0.5) * 0.03;  // ±0.015
-    mem.bias.press = (Math.random() - 0.5) * 0.03;  // ±0.015
-    mem.bias.flow  = (Math.random() - 0.5) * 0.12;  // ±0.06
+    // Inactive compressors need weaker bias
+    if (mem.state === "inactive") {
+      mem.bias.temp  = (Math.random() - 0.5) * 0.02; // ±0.01
+      mem.bias.vib   = (Math.random() - 0.5) * 0.01; // ±0.005
+      mem.bias.press = (Math.random() - 0.5) * 0.01; // ±0.005
+      mem.bias.flow  = (Math.random() - 0.5) * 0.04; // ±0.02
+      return;
+    }
+
+    // Active compressors — reduced bias for stability
+    mem.bias.temp  = (Math.random() - 0.5) * 0.04; // ±0.02
+    mem.bias.vib   = (Math.random() - 0.5) * 0.02; // ±0.01
+    mem.bias.press = (Math.random() - 0.5) * 0.02; // ±0.01
+    mem.bias.flow  = (Math.random() - 0.5) * 0.08; // ±0.04
   }
 }
 
-// ---------------- STATUS TRANSITION LOGIC ----------------
+// ---------------- STATUS LOGIC (unchanged) ----------------
 function chooseStatus(id) {
   const mem = compressorMemory[id];
   const now = Date.now();
@@ -356,23 +307,15 @@ function chooseStatus(id) {
 // ---------------- MAIN LOOP ----------------
 async function runTick() {
   const running = await checkIsRunning();
-  if (!running) {
-    console.log("Simulator paused (isRunning = false)");
-    return;
-  }
+  if (!running) return;
 
   if (await checkInactivity()) {
-    console.log("Auto-stop: No UI activity detected. Pausing simulator.");
     await db.ref("simulator/isRunning").set(false);
     return;
   }
 
   const batch = COMPRESSORS.map(id => generateCompressorData(id));
   latestBatch = batch;
-
-  console.log("\n=== TwinTech Telemetry Tick ===");
-  console.log(JSON.stringify(batch, null, 2));
-  console.log("================================\n");
 
   try {
     await writeLatestToFirebase(batch);
@@ -386,6 +329,9 @@ async function runTick() {
   }
 }
 
+// ---------------- UPDATED WARNING LOCK ----------------
+const WARNING_LOCK_MS = 10000; // 10 seconds
+
 // ---------------- FIREBASE WRITERS ----------------
 async function writeLatestToFirebase(batch) {
   const ref = db.ref("compressors/latest");
@@ -396,18 +342,17 @@ async function writeHistoryToFirebase(batch) {
   const ref = db.ref("compressors/history");
   const ts = Date.now();
   await ref.child(ts).set(batch);
-  console.log("History snapshot written:", ts);
 }
 
-// ---------------- DATA GENERATION ----------------
+// ---------------- UTILS ----------------
 function clamp(v, min, max) {
   return Math.min(Math.max(v, min), max);
 }
 
+// ---------------- DATA GENERATION ----------------
 function generateCompressorData(id) {
   const mem = compressorMemory[id];
 
-  // NEW: bias update
   updateBias(mem);
 
   let status = chooseStatus(id);
@@ -431,15 +376,15 @@ function generateCompressorData(id) {
       event_type: "none",
       risk_score: 0,
       ai_alert: false,
-      ai_reason: "No AI alert (unit offline, no telemetry).",
+      ai_reason: "No AI alert (unit offline).",
       message: "Compressor offline — no telemetry.",
-      insights_manager: "Unit offline — no current production impact.",
-      insights_engineer: "AI monitoring paused until the compressor returns to operation.",
-      insights_maintenance: "Check power, connectivity, and safety interlocks if shutdown was not expected."
+      insights_manager: "Unit offline — no production impact.",
+      insights_engineer: "AI monitoring paused.",
+      insights_maintenance: "Check power and interlocks if unexpected."
     };
   }
 
-  // ---------------- DRIFT ENGINE WITH BIAS ----------------
+  // ---------------- DRIFT ENGINE ----------------
   const updateTrend = (key, scale) => {
     mem.trend[key] = mem.trend[key] * 0.85 + (Math.random() - 0.5) * scale;
   };
@@ -456,18 +401,18 @@ function generateCompressorData(id) {
     updateTrend("flow", 0.01);
   }
 
-  // Apply drift + NEW bias
+  // Apply drift + bias
   if (status === "active" || status === "inactive") {
     mem.temperature += mem.trend.temp + mem.bias.temp;
     mem.vibration   += mem.trend.vib  + mem.bias.vib;
     mem.pressure    += mem.trend.press + mem.bias.press;
     mem.flow        += mem.trend.flow + mem.bias.flow;
 
-    // Cross‑coupling
+    // Cross-coupling
     mem.vibration += mem.trend.temp * 0.03;
     mem.pressure += mem.trend.flow * -0.02;
 
-    // Baselines
+    // ---------------- UPDATED MEAN REVERSION ----------------
     const TEMP_BASE_ACTIVE = 81;
     const TEMP_BASE_INACTIVE = 75.5;
     const VIB_BASE_ACTIVE = 2.9;
@@ -482,14 +427,14 @@ function generateCompressorData(id) {
     const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
     const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
 
-    // Mean reversion
-    mem.temperature += (TEMP_BASE - mem.temperature) * 0.02;
-    mem.vibration += (VIB_BASE - mem.vibration) * 0.02;
-    mem.pressure += (PRESS_BASE - mem.pressure) * 0.02;
-    mem.flow += (FLOW_BASE - mem.flow) * 0.04;
+    // Stronger mean reversion for stability
+    mem.temperature += (TEMP_BASE - mem.temperature) * 0.03;
+    mem.vibration   += (VIB_BASE - mem.vibration) * 0.03;
+    mem.pressure    += (PRESS_BASE - mem.pressure) * 0.03;
+    mem.flow        += (FLOW_BASE - mem.flow) * 0.05;
   }
 
-  // Clamp to physical ranges
+  // ---------------- CLAMP VALUES ----------------
   if (status === "active") {
     mem.temperature = clamp(mem.temperature, 80, 86);
     mem.vibration   = clamp(mem.vibration, 2.8, 3.6);
@@ -553,7 +498,6 @@ function generateCompressorData(id) {
     if (warning === "high") risk_score = 3.5 + Math.random() * 1.5;
   }
 
-  // C5 never high
   if (id === "compressor_5" && warning === "high") {
     warning = "medium";
   }
@@ -567,16 +511,16 @@ function generateCompressorData(id) {
   if (status === "active") {
     if (risk_score > 7.5) {
       ai_alert = true;
-      ai_reason = "AI detected high combined risk pattern — early intervention recommended.";
+      ai_reason = "AI detected high combined risk pattern.";
     } else if (risk_score > 5 && warning === "medium") {
       ai_alert = true;
-      ai_reason = "AI detected an emerging pattern — parameters drifting toward risk zone.";
+      ai_reason = "AI detected an emerging pattern.";
     }
 
     if (warning !== "normal" && event_type !== "normal") {
       ai_alert = true;
       if (ai_reason === "No AI alert.") {
-        ai_reason = `AI confirmed ${event_type} deviation and recommends preventive action.`;
+        ai_reason = `AI confirmed ${event_type} deviation.`;
       }
     }
   }
@@ -588,10 +532,10 @@ function generateCompressorData(id) {
       risk_score >= 3
     ) {
       ai_alert = true;
-      ai_reason = "AI detected an idle-state trend that could impact reliability on the next startup.";
+      ai_reason = "AI detected an idle-state trend.";
     } else {
       ai_alert = false;
-      ai_reason = "No AI alert (idle-state behavior within acceptable range).";
+      ai_reason = "No AI alert (idle-state normal).";
     }
   }
 
@@ -781,7 +725,6 @@ function buildInsights(ctx) {
 // ---------------- API ENDPOINTS ----------------
 
 app.get("/wake", async (req, res) => {
-  console.log("⚡ Wake request received — keeping simulator alive");
   await db.ref("simulator/lastActive").set(Date.now());
   res.json({ status: "awake" });
 });
