@@ -1,5 +1,8 @@
-// TwinTech Simulator — Stable Version with Bias Drift + Threshold Improvements
-// Chunk 1 / 4 — Imports, Firebase, Express, Thresholds
+/* ---------------------------------------------------------
+   TwinTech Simulator — Final Stable Version
+   Chunk 1 / 4 — Imports, Firebase, Express, Thresholds
+   (No output fields here — safe for Retool & logs)
+--------------------------------------------------------- */
 
 const express = require("express");
 const cors = require("cors");
@@ -131,6 +134,11 @@ function getSeverity(value, type) {
 
   return "normal";
 }
+/* ---------------------------------------------------------
+   TwinTech Simulator — Final Stable Version
+   Chunk 2 / 4 — Warning Evaluation, Memory, Bias, Status Logic
+--------------------------------------------------------- */
+
 // ---------------- WARNING EVALUATION ----------------
 function evaluateWarning(readings, currentWarningState) {
   const now = Date.now();
@@ -247,24 +255,22 @@ function updateBias(mem) {
   if (now - mem.biasLastFlip > BIAS_FLIP_MS) {
     mem.biasLastFlip = now;
 
-    // Inactive compressors need weaker bias
     if (mem.state === "inactive") {
-      mem.bias.temp  = (Math.random() - 0.5) * 0.02; // ±0.01
-      mem.bias.vib   = (Math.random() - 0.5) * 0.01; // ±0.005
-      mem.bias.press = (Math.random() - 0.5) * 0.01; // ±0.005
-      mem.bias.flow  = (Math.random() - 0.5) * 0.04; // ±0.02
+      mem.bias.temp  = (Math.random() - 0.5) * 0.02;
+      mem.bias.vib   = (Math.random() - 0.5) * 0.01;
+      mem.bias.press = (Math.random() - 0.5) * 0.01;
+      mem.bias.flow  = (Math.random() - 0.5) * 0.04;
       return;
     }
 
-    // Active compressors — reduced bias for stability
-    mem.bias.temp  = (Math.random() - 0.5) * 0.04; // ±0.02
-    mem.bias.vib   = (Math.random() - 0.5) * 0.02; // ±0.01
-    mem.bias.press = (Math.random() - 0.5) * 0.02; // ±0.01
-    mem.bias.flow  = (Math.random() - 0.5) * 0.08; // ±0.04
+    mem.bias.temp  = (Math.random() - 0.5) * 0.04;
+    mem.bias.vib   = (Math.random() - 0.5) * 0.02;
+    mem.bias.press = (Math.random() - 0.5) * 0.02;
+    mem.bias.flow  = (Math.random() - 0.5) * 0.08;
   }
 }
 
-// ---------------- STATUS LOGIC (unchanged) ----------------
+// ---------------- STATUS LOGIC ----------------
 function chooseStatus(id) {
   const mem = compressorMemory[id];
   const now = Date.now();
@@ -304,52 +310,17 @@ function chooseStatus(id) {
 
   return current;
 }
-// ---------------- MAIN LOOP ----------------
-async function runTick() {
-  const running = await checkIsRunning();
-  if (!running) return;
-
-  if (await checkInactivity()) {
-    await db.ref("simulator/isRunning").set(false);
-    return;
-  }
-
-  const batch = COMPRESSORS.map(id => generateCompressorData(id));
-  latestBatch = batch;
-
-  try {
-    await writeLatestToFirebase(batch);
-
-    if (Date.now() - lastHistorySave >= HISTORY_INTERVAL_MS) {
-      await writeHistoryToFirebase(batch);
-      lastHistorySave = Date.now();
-    }
-  } catch (err) {
-    console.error("Firebase write error:", err);
-  }
-}
-
-// ---------------- UPDATED WARNING LOCK ----------------
-const WARNING_LOCK_MS = 10000; // 10 seconds
-
-// ---------------- FIREBASE WRITERS ----------------
-async function writeLatestToFirebase(batch) {
-  const ref = db.ref("compressors/latest");
-  await ref.set(batch);
-}
-
-async function writeHistoryToFirebase(batch) {
-  const ref = db.ref("compressors/history");
-  const ts = Date.now();
-  await ref.child(ts).set(batch);
-}
+/* ---------------------------------------------------------
+   TwinTech Simulator — Final Stable Version
+   Chunk 3 / 4 — Drift, Bias, Mean Reversion, AI Logic, Return Object
+--------------------------------------------------------- */
 
 // ---------------- UTILS ----------------
 function clamp(v, min, max) {
   return Math.min(Math.max(v, min), max);
 }
 
-// ---------------- DATA GENERATION ----------------
+// ---------------- MAIN DATA GENERATION ----------------
 function generateCompressorData(id) {
   const mem = compressorMemory[id];
 
@@ -427,7 +398,6 @@ function generateCompressorData(id) {
     const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
     const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
 
-    // Stronger mean reversion for stability
     mem.temperature += (TEMP_BASE - mem.temperature) * 0.03;
     mem.vibration   += (VIB_BASE - mem.vibration) * 0.03;
     mem.pressure    += (PRESS_BASE - mem.pressure) * 0.03;
@@ -570,6 +540,8 @@ function generateCompressorData(id) {
       flow
     });
 
+  // ---------------- FINAL RETURN OBJECT ----------------
+  // ⭐ EXACT SAME FIELD NAMES AS BEFORE ⭐
   return {
     compressor_id: id,
     timestamp: Date.now(),
@@ -577,178 +549,70 @@ function generateCompressorData(id) {
     temperature: Number(temperature.toFixed(2)),
     vibration: Number(vibration.toFixed(2)),
     pressure: Number(pressure.toFixed(2)),
-    flow_rate: Number(flow.toFixed(2)),
+    flow_rate: Number(flow.toFixed(2)),   // SAME NAME
     warning,
-    event_type,
-    risk_score,
-    ai_alert,
-    ai_reason,
+    event_type,                           // SAME NAME
+    risk_score,                           // SAME NAME
+    ai_alert,                             // SAME NAME
+    ai_reason,                            // SAME NAME
     message,
-    insights_manager: manager,
-    insights_engineer: engineer,
-    insights_maintenance: maintenance
+    insights_manager: manager,            // SAME NAME
+    insights_engineer: engineer,          // SAME NAME
+    insights_maintenance: maintenance     // SAME NAME
   };
 }
-// ---------------- HELPERS ----------------
-function weightedChoice(items, weights) {
-  const total = weights.reduce((a, b) => a + b, 0);
-  let r = Math.random() * total;
-  for (let i = 0; i < items.length; i++) {
-    if (r < weights[i]) return items[i];
-    r -= weights[i];
-  }
-  return items[items.length - 1];
+/* ---------------------------------------------------------
+   TwinTech Simulator — Final Stable Version
+   Chunk 4 / 4 — Firebase Writers, API, Server Start
+--------------------------------------------------------- */
+
+// ---------------- FIREBASE WRITERS ----------------
+async function writeLatestToFirebase(batch) {
+  const ref = db.ref("compressors/latest");
+  await ref.set(batch);
 }
 
-function buildTrendObservations({ status, temperature, vibration, pressure, flow }) {
-  const notes = [];
-
-  if (status === "active") {
-    if (temperature > 84.5) notes.push("temperature slightly elevated");
-    else if (temperature < 80.5) notes.push("temperature slightly below typical range");
-
-    if (vibration > 3.4) notes.push("vibration trending upward");
-    else if (vibration < 2.9) notes.push("vibration lower than usual");
-
-    if (pressure < 99.5) notes.push("pressure slightly below baseline");
-    else if (pressure > 101.5) notes.push("pressure slightly above baseline");
-
-    if (flow < 192) notes.push("flow approaching lower bound of normal");
-    else if (flow > 208) notes.push("flow near upper bound of normal");
-  }
-
-  else if (status === "inactive") {
-    if (temperature > 77.5) notes.push("temperature slightly elevated during idle state");
-    if (vibration > 2.1) notes.push("vibration higher than expected for idle operation");
-    if (pressure < 99.0) notes.push("pressure slightly below expected idle baseline");
-    else if (pressure > 100.3) notes.push("pressure slightly above expected idle baseline");
-    if (flow < 110) notes.push("flow slightly low for idle state");
-    else if (flow > 122) notes.push("flow slightly high for idle state");
-  }
-
-  else if (status === "offline") {
-    notes.push("baseline conditions assumed stable while unit is offline");
-  }
-
-  if (notes.length === 0) {
-    return "Observations: parameters stable across all metrics.";
-  }
-
-  return "Observations: " + notes.join(", ") + ".";
+async function writeHistoryToFirebase(batch) {
+  const ref = db.ref("compressors/history");
+  const ts = Date.now();
+  await ref.child(ts).set(batch);
+  console.log("History snapshot written:", ts);
 }
 
-function buildInsights(ctx) {
-  const {
-    status,
-    warning,
-    event_type,
-    ai_alert,
-    temperature,
-    vibration,
-    pressure,
-    flow
-  } = ctx;
-
-  const observations = buildTrendObservations({ status, temperature, vibration, pressure, flow });
-
-  if (status === "offline") {
-    return {
-      message: "Compressor offline — no telemetry. " + observations,
-      manager: "Unit offline — no current production impact. " + observations,
-      engineer: "Unit offline — AI monitoring paused until the compressor returns to operation. " + observations,
-      maintenance: "Check power, connectivity, and safety interlocks if shutdown was not expected. " + observations
-    };
+// ---------------- MAIN LOOP ----------------
+async function runTick() {
+  const running = await checkIsRunning();
+  if (!running) {
+    console.log("Simulator paused (isRunning = false)");
+    return;
   }
 
-  if (status === "inactive" && warning === "normal") {
-    return {
-      message: "Compressor inactive — sensors online, no anomalies. " + observations,
-      manager: "Idle unit — no production risk. " + observations,
-      engineer: "Parameters stable during inactivity. " + observations,
-      maintenance: "Routine checks only — no immediate action. " + observations
-    };
+  if (await checkInactivity()) {
+    console.log("Auto-stop: No UI activity detected. Pausing simulator.");
+    await db.ref("simulator/isRunning").set(false);
+    return;
   }
 
-  if (status === "inactive" && warning === "medium") {
-    return {
-      message: `Inactive compressor with mild ${event_type} deviation — review before next startup. ${observations}`,
-      manager: `No production impact — unit is idle, but follow up before restart. ${observations}`,
-      engineer: `Review ${event_type} trend history and plan checks before the next startup. ${observations}`,
-      maintenance: `Inspect ${event_type} components before bringing the compressor back online. ${observations}`
-    };
-  }
+  const batch = COMPRESSORS.map(id => generateCompressorData(id));
+  latestBatch = batch;
 
-  if (ai_alert && event_type === "normal" && warning === "medium" && status === "active") {
-    return {
-      message: `AI detected early risk pattern — parameters look normal but trends are shifting. ${observations}`,
-      manager: `Emerging risk — monitor this compressor to avoid downtime. ${observations}`,
-      engineer: `Review vibration, flow, and temperature trends. ${observations}`,
-      maintenance: `Plan inspection in the next maintenance window. ${observations}`
-    };
-  }
+  console.log("\n=== TwinTech Telemetry Tick ===");
+  console.log(JSON.stringify(batch, null, 2));
+  console.log("================================\n");
 
-  if (warning === "normal") {
-    return {
-      message: "Operating normally. " + observations,
-      manager: "Compressor healthy — no production risk. " + observations,
-      engineer: "Parameters within expected range. " + observations,
-      maintenance: "Continue routine preventive maintenance. " + observations
-    };
-  }
+  try {
+    await writeLatestToFirebase(batch);
 
-  if (warning === "medium") {
-    return {
-      message: `Medium ${event_type} deviation detected. ${observations}`,
-      manager: `Emerging operational risk — monitor this unit. ${observations}`,
-      engineer: `Review ${event_type} trend history and process conditions. ${observations}`,
-      maintenance: `Inspect ${event_type} components in the next maintenance window. ${observations}`
-    };
+    if (Date.now() - lastHistorySave >= HISTORY_INTERVAL_MS) {
+      await writeHistoryToFirebase(batch);
+      lastHistorySave = Date.now();
+    }
+  } catch (err) {
+    console.error("Firebase write error:", err);
   }
-
-  if (warning === "high") {
-    return {
-      message: `High ${event_type} deviation — immediate attention required. ${observations}`,
-      manager: `High operational risk — potential production impact. ${observations}`,
-      engineer: `Critical ${event_type} deviation — perform root cause analysis. ${observations}`,
-      maintenance: `Treat as urgent — schedule immediate inspection for ${event_type}. ${observations}`
-    };
-  }
-
-  return {
-    message: observations,
-    manager: observations,
-    engineer: observations,
-    maintenance: observations
-  };
 }
 
 // ---------------- API ENDPOINTS ----------------
-
-app.get("/wake", async (req, res) => {
-  await db.ref("simulator/lastActive").set(Date.now());
-  res.json({ status: "awake" });
-});
-
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: Date.now() });
-});
-
-app.post("/ui/active", async (req, res) => {
-  await db.ref("simulator/lastActive").set(Date.now());
-  res.json({ status: "updated" });
-});
-
-app.get("/api/compressor/:id", (req, res) => {
-  const id = req.params.id;
-  const item = latestBatch.find(c => c.compressor_id === id);
-
-  if (!item) {
-    return res.status(404).json({ error: "Compressor not found" });
-  }
-
-  res.json(item);
-});
-
 app.get("/", (req, res) => {
   res.send("TwinTech Simulator is running.");
 });
