@@ -319,6 +319,90 @@ function chooseStatus(id) {
 function clamp(v, min, max) {
   return Math.min(Math.max(v, min), max);
 }
+function buildInsights({
+  status,
+  warning,
+  event_type,
+  ai_alert,
+  temperature,
+  vibration,
+  pressure,
+  flow
+}) {
+  // ---------------- MESSAGE (Operator-facing) ----------------
+  let message = "System operating normally.";
+
+  if (status === "inactive") {
+    message = "Unit is idle — reduced load conditions.";
+  }
+
+  if (warning === "medium") {
+    message = `Moderate ${event_type} deviation detected.`;
+  }
+
+  if (warning === "high") {
+    message = `Critical ${event_type} deviation — immediate attention required.`;
+  }
+
+  if (ai_alert) {
+    message = "AI detected an emerging risk pattern.";
+  }
+
+  // ---------------- MANAGER INSIGHT ----------------
+  let manager = "Production stable — no action required.";
+
+  if (status === "inactive") {
+    manager = "Unit idle — no production impact.";
+  }
+
+  if (warning === "medium") {
+    manager = "Monitor performance — potential efficiency loss.";
+  }
+
+  if (warning === "high") {
+    manager = "High-risk condition — potential production impact.";
+  }
+
+  if (ai_alert) {
+    manager = "AI recommends proactive review to avoid downtime.";
+  }
+
+  // ---------------- ENGINEER INSIGHT ----------------
+  let engineer = "All parameters within expected ranges.";
+
+  if (warning === "medium") {
+    engineer = `Parameter deviation detected in ${event_type}.`;
+  }
+
+  if (warning === "high") {
+    engineer = `Critical deviation in ${event_type} — investigate root cause.`;
+  }
+
+  if (ai_alert) {
+    engineer = "AI detected a multi-parameter correlation pattern.";
+  }
+
+  // ---------------- MAINTENANCE INSIGHT ----------------
+  let maintenance = "No maintenance action required.";
+
+  if (status === "inactive") {
+    maintenance = "Unit idle — verify lubrication and standby conditions.";
+  }
+
+  if (warning === "medium") {
+    maintenance = `Inspect subsystem related to ${event_type}.`;
+  }
+
+  if (warning === "high") {
+    maintenance = `Urgent inspection required — ${event_type} risk.`;
+  }
+
+  if (ai_alert) {
+    maintenance = "AI recommends early maintenance check to prevent escalation.";
+  }
+
+  return { message, manager, engineer, maintenance };
+}
 
 // ---------------- MAIN DATA GENERATION ----------------
 function generateCompressorData(id) {
