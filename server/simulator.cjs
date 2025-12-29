@@ -86,10 +86,10 @@ async function checkInactivity() {
 // Active: temperature ~78–86, vibration ~2.5–3.8, pressure ~98–102, flow ~185–215
 // Inactive: temperature ~76–82, vibration ~1.8–2.8, pressure ~98–101, flow ~110–135
 const warningThresholds = {
-  temperature: { medium: 86, high: 89, min: 70, max: 100 },
-  vibration: { medium: 3.6, high: 3.9, min: 0, max: 6 },
-  pressureLow: { medium: 98, high: 97, min: 90, max: 105 },
-  flowLow: { medium: 182, high: 176, min: 120, max: 240 }
+  temperature: { medium: 84.5, high: 88.5, min: 70, max: 100 },
+  vibration:   { medium: 3.4,  high: 3.9,  min: 0,  max: 6 },
+  pressureLow: { medium: 98.5, high: 97.5, min: 90, max: 105 },
+  flowLow:     { medium: 188,  high: 180,  min: 120, max: 240 }
 };
 
 // Normalize score 0–1 based on how far into the warning band we are
@@ -218,6 +218,7 @@ function evaluateWarning(readings, currentWarningState) {
   if (isInactive || isFixedInactive) {
     mediumCandidates = mediumCandidates.filter(c => c.score > 0.4);
   }
+  // For active units, no extra filter → medium appears sometimes
 
   if (mediumCandidates.length === 0) {
     return {
@@ -265,7 +266,7 @@ const compressorMemory = {
     pressure: 100,
     flow: 200,
     trend: { temp: 0, vib: 0, press: 0, flow: 0 },
-    state: "active", // logical state, but we will override to offline in generator
+    state: "active", // active machine
     lastChange: Date.now(),
     warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
   },
@@ -311,11 +312,10 @@ function chooseStatus(id) {
   if (id === "compressor_5") return "inactive"; // always inactive
   if (id === "compressor_6") return "offline";  // always offline
 
-  // C3 is conceptually "active device but offline in UI" — we will handle offline in generator.
-  // For status logic, treat 1–4 as active machines with very stable behavior.
-  const MIN_ACTIVE = 120000;   // 2 minutes
-  const MIN_INACTIVE = 60000;  // 1 minute
-  const MIN_OFFLINE = 300000;  // 5 minutes
+  // C1–C4 (and C3) are active machines with very stable behavior.
+  const MIN_ACTIVE = 180000;   // 3 minutes
+  const MIN_INACTIVE = 90000;  // 1.5 minutes
+  const MIN_OFFLINE = 600000;  // 10 minutes
 
   let current = mem.state;
 
@@ -328,9 +328,9 @@ function chooseStatus(id) {
   const r = Math.random();
 
   if (current === "active") {
-    if (r < 0.995) return "active";     // 99.5% stay active
-    if (r < 0.998) return "inactive";   // 0.3% chance
-    return "offline";                   // 0.2% chance
+    if (r < 0.9985) return "active";    // 99.85% stay active
+    if (r < 0.9995) return "inactive";  // 0.1% chance
+    return "offline";                   // 0.05% chance
   }
 
   if (current === "inactive") {
@@ -399,12 +399,6 @@ function generateCompressorData(id) {
 
   // 1) STATUS: choose realistic state
   let status = chooseStatus(id);
-
-  // Hard overrides for your storytelling:
-  // C3: always offline in UI (digital twin sees it but no telemetry)
-  if (id === "compressor_3") {
-    status = "offline";
-  }
 
   if (status !== mem.state) {
     mem.state = status;
