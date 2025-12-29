@@ -427,10 +427,6 @@ function generateCompressorData(id) {
     }
   }
 
-  const temperature = mem.temperature;
-  const vibration = mem.vibration;
-  const pressure = mem.pressure;
-  const flow = mem.flow;
   let status = chooseStatus(id);
 
   if (status !== mem.state) {
