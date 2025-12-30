@@ -1,15 +1,38 @@
+Here is the full simulator file(CommonJS) updated to:
+- preserve the exact output schema by default,
+- add a PREDICTIVE_WARNINGS env flag to turn ML promotions on / off(default: ON),
+  - safely parse FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_B64,
+    - optionally expose ML fields in the returned payload via EXPOSE_ML_FIELDS = false(default ).
+
+Save as simulator.cjs.
+
+```javascript name=simulator.cjs
 /* ---------------------------------------------------------
-   TwinTech Simulator — Final Stable Version
-   Chunk 1 / 4 — Imports, Firebase, Express, Thresholds
-   (No output fields here — safe for Retool & logs)
+   TwinTech Simulator — Final Stable Version (Render-ready)
+   - ML-style predictive warning layer (toggleable via PREDICTIVE_WARNINGS)
+   - Optional exposure of ML fields via EXPOSE_ML_FIELDS
+   - Safe FIREBASE_SERVICE_ACCOUNT parsing (supports base64)
+   - Preserves output schema by default (no breaking changes)
 --------------------------------------------------------- */
 
 const express = require("express");
 const cors = require("cors");
 const admin = require("firebase-admin");
 
-// ---------------- FIREBASE INIT ----------------
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+// ---------------- ENV & FIREBASE INIT ----------------
+// Safe handling: support FIREBASE_SERVICE_ACCOUNT (raw JSON) or FIREBASE_SERVICE_ACCOUNT_B64
+let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+if (!serviceAccountJson && process.env.FIREBASE_SERVICE_ACCOUNT_B64) {
+  try {
+    serviceAccountJson = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_B64, "base64").toString("utf8");
+  } catch (e) {
+    console.error("Failed to decode FIREBASE_SERVICE_ACCOUNT_B64:", e);
+  }
+}
+if (!serviceAccountJson) {
+  throw new Error("Missing Firebase service account in env: set FIREBASE_SERVICE_ACCOUNT or FIREBASE_SERVICE_ACCOUNT_B64");
+}
+const serviceAccount = JSON.parse(serviceAccountJson);
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -17,6 +40,10 @@ admin.initializeApp({
 });
 
 const db = admin.database();
+
+// Feature toggles (env)
+const PREDICTIVE_WARNINGS = process.env.PREDICTIVE_WARNINGS !== "false"; // default true
+const EXPOSE_ML_FIELDS = process.env.EXPOSE_ML_FIELDS === "true"; // default false
 
 // ---------------- GRACEFUL SHUTDOWN ----------------
 async function gracefulShutdown() {
@@ -79,16 +106,14 @@ async function checkInactivity() {
   return diff > TEN_MINUTES;
 }
 
-// ---------------- UPDATED WARNING THRESHOLDS ----------------
-// Improved thresholds for smoother, more realistic warning behavior.
-
+// ---------------- WARNING THRESHOLDS ----------------
 const warningThresholds = {
   temperature: { medium: 83.3, high: 88.5, min: 70, max: 100 },
   vibration:   { medium: 3.30, high: 3.9, min: 0, max: 6 },
   pressureLow: { medium: 100.0, high: 97.5, min: 90, max: 105 },
   flowLow:     { medium: 199, high: 178, min: 120, max: 240 }
 };
-const WARNING_LOCK_MS = 10 * 1000; // 1S0 seconds
+const WARNING_LOCK_MS = 10 * 1000; // 10 seconds
 
 function normalizeScore(value, type) {
   const t = warningThresholds[type];
@@ -135,95 +160,11 @@ function getSeverity(value, type) {
 
   return "normal";
 }
+
 /* ---------------------------------------------------------
-   TwinTech Simulator — Final Stable Version
-   Chunk 2 / 4 — Warning Evaluation, Memory, Bias, Status Logic
+   MEMORY, BIAS FLIP, STATUS LOGIC
 --------------------------------------------------------- */
 
-// ---------------- WARNING EVALUATION ----------------
-function evaluateWarning(readings, currentWarningState) {
-  const now = Date.now();
-  const { temperature, vibration, pressure, flow, status, compressor_id } = readings;
-
-  const candidates = [
-    {
-      key: "temperature",
-      severity: getSeverity(temperature, "temperature"),
-      score: normalizeScore(temperature, "temperature"),
-      event_type: "overheating"
-    },
-    {
-      key: "vibration",
-      severity: getSeverity(vibration, "vibration"),
-      score: normalizeScore(vibration, "vibration"),
-      event_type: "vibration"
-    },
-    {
-      key: "pressureLow",
-      severity: getSeverity(pressure, "pressureLow"),
-      score: normalizeScore(pressure, "pressureLow"),
-      event_type: "pressure"
-    },
-    {
-      key: "flowLow",
-      severity: getSeverity(flow, "flowLow"),
-      score: normalizeScore(flow, "flowLow"),
-      event_type: "low_flow"
-    }
-  ];
-
-  const isInactive = status === "inactive";
-  const isFixedInactive = compressor_id === "compressor_5";
-
-  let highCandidates = candidates.filter(c => c.severity === "high" && c.score > 0);
-
-  if (isInactive || isFixedInactive) {
-    highCandidates = [];
-  }
-
-  if (highCandidates.length > 0) {
-    highCandidates.sort((a, b) => b.score - a.score);
-    const best = highCandidates[0];
-    return {
-      warning: "high",
-      event_type: best.event_type,
-      startTime: now
-    };
-  }
-
-  if (
-    currentWarningState &&
-    currentWarningState.warning !== "normal" &&
-    now - currentWarningState.startTime < WARNING_LOCK_MS
-  ) {
-    return currentWarningState;
-  }
-
-  let mediumCandidates = candidates.filter(c => c.severity === "medium" && c.score > 0);
-
-  if (isInactive || isFixedInactive) {
-    mediumCandidates = mediumCandidates.filter(c => c.score > 0.25);
-  }
-
-  if (mediumCandidates.length === 0) {
-    return {
-      warning: "normal",
-      event_type: "normal",
-      startTime: now
-    };
-  }
-
-  mediumCandidates.sort((a, b) => b.score - a.score);
-  const bestMedium = mediumCandidates[0];
-
-  return {
-    warning: "medium",
-    event_type: bestMedium.event_type,
-    startTime: now
-  };
-}
-
-// ---------------- MEMORY WITH RANDOMIZED BIAS FLIP ----------------
 function initMemory(state, temp, vib, press, flow) {
   return {
     temperature: temp,
@@ -235,7 +176,16 @@ function initMemory(state, temp, vib, press, flow) {
     biasLastFlip: Date.now() - Math.random() * 90000, // randomize 0–90s
     state,
     lastChange: Date.now(),
-    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() }
+    warningState: { warning: "normal", event_type: "normal", startTime: Date.now() },
+    history: [
+      {
+        ts: Date.now(),
+        temperature: temp,
+        vibration: vib,
+        pressure: press,
+        flow: flow
+      }
+    ]
   };
 }
 
@@ -311,15 +261,261 @@ function chooseStatus(id) {
 
   return current;
 }
+
 /* ---------------------------------------------------------
-   TwinTech Simulator — Final Stable Version
-   Chunk 3 / 4 — Drift, Bias, Mean Reversion, AI Logic, Return Object
+   ML PREDICTOR (velocity -> time-to-threshold), WARNING EVAL, INSIGHTS
 --------------------------------------------------------- */
 
 // ---------------- UTILS ----------------
 function clamp(v, min, max) {
   return Math.min(Math.max(v, min), max);
 }
+
+function updateMemoryHistory(mem, reading) {
+  const MAX_HISTORY = 12; // last ~12 readings (with TICK_MS=2000 -> ~24s)
+  mem.history.push({
+    ts: reading.ts || Date.now(),
+    temperature: reading.temperature,
+    vibration: reading.vibration,
+    pressure: reading.pressure,
+    flow: reading.flow
+  });
+  if (mem.history.length > MAX_HISTORY) mem.history.shift();
+}
+
+// Lightweight predictive model: uses short history + trend to estimate time-to-medium-threshold (ms).
+function computeMLPrediction(mem) {
+  if (!mem || !Array.isArray(mem.history) || mem.history.length < 2) {
+    return { ml_score: 0, predicted_event_type: "normal", time_to_warning_ms: Infinity, details: {} };
+  }
+
+  const h = mem.history;
+  const latest = h[h.length - 1];
+  let prev = null;
+  for (let i = h.length - 2; i >= 0; i--) {
+    if (h[i].ts < latest.ts) {
+      prev = h[i];
+      break;
+    }
+  }
+  if (!prev) prev = h[0];
+
+  const dt = Math.max(1, latest.ts - prev.ts); // ms
+
+  const v_temp = (latest.temperature - prev.temperature) / dt;
+  const v_vib  = (latest.vibration - prev.vibration) / dt;
+  const v_press = (latest.pressure - prev.pressure) / dt;
+  const v_flow  = (latest.flow - prev.flow) / dt;
+
+  function timeToMedium(value, velPerMs, type) {
+    const t = warningThresholds[type];
+    if (!t) return Infinity;
+
+    if (type === "temperature" || type === "vibration") {
+      const target = t.medium;
+      if (value >= target) return 0;
+      if (velPerMs <= 0) return Infinity;
+      const ms = (target - value) / velPerMs;
+      return ms;
+    }
+
+    if (type === "pressureLow" || type === "flowLow") {
+      const target = t.medium;
+      if (value <= target) return 0;
+      if (velPerMs >= 0) return Infinity;
+      const ms = (value - target) / (-velPerMs);
+      return ms;
+    }
+
+    return Infinity;
+  }
+
+  const nowVals = {
+    temperature: latest.temperature,
+    vibration: latest.vibration,
+    pressure: latest.pressure,
+    flow: latest.flow
+  };
+
+  const tt_temp = timeToMedium(nowVals.temperature, v_temp, "temperature");
+  const tt_vib  = timeToMedium(nowVals.vibration, v_vib, "vibration");
+  const tt_press = timeToMedium(nowVals.pressure, v_press, "pressureLow");
+  const tt_flow  = timeToMedium(nowVals.flow, v_flow, "flowLow");
+
+  const HORIZON_MS = 20 * 60 * 1000; // 20 minutes
+  function urgencyFromTime(tt) {
+    if (tt === 0) return 1;
+    if (!isFinite(tt)) return 0;
+    const u = 1 - Math.min(tt / HORIZON_MS, 1);
+    return clamp(u, 0, 1);
+  }
+
+  const u_temp = urgencyFromTime(tt_temp);
+  const u_vib  = urgencyFromTime(tt_vib);
+  const u_press = urgencyFromTime(tt_press);
+  const u_flow  = urgencyFromTime(tt_flow);
+
+  const w_temp = 0.35;
+  const w_vib  = 0.30;
+  const w_press = 0.15;
+  const w_flow = 0.20;
+
+  const ml_score_raw = w_temp * u_temp + w_vib * u_vib + w_press * u_press + w_flow * u_flow;
+  const ml_score = clamp(ml_score_raw, 0, 1);
+
+  const urgencies = [
+    { key: "temperature", u: u_temp, tt: tt_temp },
+    { key: "vibration", u: u_vib, tt: tt_vib },
+    { key: "pressureLow", u: u_press, tt: tt_press },
+    { key: "flowLow", u: u_flow, tt: tt_flow }
+  ];
+  urgencies.sort((a, b) => b.u - a.u);
+  const top = urgencies[0];
+
+  const predicted_event_type = top.u > 0.05 ? (
+    top.key === "temperature" ? "overheating" :
+    top.key === "vibration" ? "vibration" :
+    top.key === "pressureLow" ? "pressure" :
+    top.key === "flowLow" ? "low_flow" :
+    "normal"
+  ) : "normal";
+
+  const time_to_warning_ms = top.tt;
+
+  return {
+    ml_score: Number(ml_score.toFixed(3)),
+    predicted_event_type,
+    time_to_warning_ms,
+    details: {
+      velocities: { v_temp, v_vib, v_press, v_flow },
+      urgencies: { u_temp, u_vib, u_press, u_flow },
+      weighted: { w_temp, w_vib, w_press, w_flow }
+    }
+  };
+}
+
+// Updated evaluateWarning to combine threshold checks and predictive ML signal (ML promotions are toggleable)
+function evaluateWarning(readings, currentWarningState, mem, predictiveEnabled = true) {
+  const now = Date.now();
+  const { temperature, vibration, pressure, flow, status, compressor_id } = readings;
+
+  const candidates = [
+    {
+      key: "temperature",
+      severity: getSeverity(temperature, "temperature"),
+      score: normalizeScore(temperature, "temperature"),
+      event_type: "overheating"
+    },
+    {
+      key: "vibration",
+      severity: getSeverity(vibration, "vibration"),
+      score: normalizeScore(vibration, "vibration"),
+      event_type: "vibration"
+    },
+    {
+      key: "pressureLow",
+      severity: getSeverity(pressure, "pressureLow"),
+      score: normalizeScore(pressure, "pressureLow"),
+      event_type: "pressure"
+    },
+    {
+      key: "flowLow",
+      severity: getSeverity(flow, "flowLow"),
+      score: normalizeScore(flow, "flowLow"),
+      event_type: "low_flow"
+    }
+  ];
+
+  const isInactive = status === "inactive";
+  const isFixedInactive = compressor_id === "compressor_5";
+
+  // Predictive ML signal
+  let ml = computeMLPrediction(mem || {});
+  const ML_HIGH = 0.75;
+  const ML_MED = 0.45;
+
+  let highCandidates = candidates.filter(c => c.severity === "high" && c.score > 0);
+
+  if (isInactive || isFixedInactive) {
+    highCandidates = [];
+  }
+
+  if (highCandidates.length > 0) {
+    highCandidates.sort((a, b) => b.score - a.score);
+    const best = highCandidates[0];
+    return {
+      warning: "high",
+      event_type: best.event_type,
+      startTime: now,
+      ml: ml
+    };
+  }
+
+  if (
+    currentWarningState &&
+    currentWarningState.warning !== "normal" &&
+    now - currentWarningState.startTime < WARNING_LOCK_MS
+  ) {
+    const kept = Object.assign({}, currentWarningState);
+    kept.ml = ml;
+    return kept;
+  }
+
+  let mediumCandidates = candidates.filter(c => c.severity === "medium" && c.score > 0);
+
+  if (isInactive || isFixedInactive) {
+    mediumCandidates = mediumCandidates.filter(c => c.score > 0.25);
+  }
+
+  // Predictive overrides (only if predictiveEnabled)
+  if (predictiveEnabled && ml && ml.ml_score >= ML_HIGH && ml.predicted_event_type !== "normal") {
+    return {
+      warning: "high",
+      event_type: ml.predicted_event_type,
+      startTime: now,
+      ml: ml
+    };
+  }
+
+  if (predictiveEnabled && ml && ml.ml_score >= ML_MED && ml.predicted_event_type !== "normal") {
+    return {
+      warning: "medium",
+      event_type: ml.predicted_event_type,
+      startTime: now,
+      ml: ml
+    };
+  }
+
+  if (mediumCandidates.length === 0) {
+    return {
+      warning: "normal",
+      event_type: "normal",
+      startTime: now,
+      ml: ml
+    };
+  }
+
+  mediumCandidates.sort((a, b) => b.score - a.score);
+  const bestMedium = mediumCandidates[0];
+
+  if (predictiveEnabled && ml && ml.ml_score > 0.15 && ml.predicted_event_type !== "normal" && ml.predicted_event_type !== bestMedium.event_type) {
+    return {
+      warning: "medium",
+      event_type: ml.predicted_event_type,
+      startTime: now,
+      ml: ml
+    };
+  }
+
+  return {
+    warning: "medium",
+    event_type: bestMedium.event_type,
+    startTime: now,
+    ml: ml
+  };
+}
+
+// Enriched buildInsights: adds recommended fixes and role-specific action items
 function buildInsights({
   status,
   warning,
@@ -328,105 +524,111 @@ function buildInsights({
   temperature,
   vibration,
   pressure,
-  flow
+  flow,
+  ml // optional
 }) {
   // ---------------- MESSAGE (Operator-facing) ----------------
   let message = "System operating normally.";
-
   if (status === "inactive") {
     message = "Unit is idle — reduced load conditions.";
   }
-
   if (warning === "medium") {
-    message = `Moderate ${event_type} deviation detected.`;
+    message = `Moderate ${ event_type } deviation detected.`;
   }
-
   if (warning === "high") {
-    message = `Critical ${event_type} deviation — immediate attention required.`;
+    message = `Critical ${ event_type } deviation — immediate attention required.`;
+  }
+  if (ai_alert) {
+    message = "AI detected an emerging risk pattern — investigate recommended actions.";
   }
 
-  if (ai_alert) {
-    message = "AI detected an emerging risk pattern.";
+  // Add ML relative timing if available
+  if (ml && ml.time_to_warning_ms && isFinite(ml.time_to_warning_ms)) {
+    const mins = Math.round(ml.time_to_warning_ms / 60000);
+    if (mins <= 0) {
+      message += " Predicted to reach warning threshold imminently.";
+    } else {
+      message += ` Predicted to reach warning threshold in ~${ mins } min.`;
+    }
   }
 
   // ---------------- MANAGER INSIGHT ----------------
   let manager = "Production stable — no action required.";
-
-  if (status === "inactive") {
-    manager = "Unit idle — no production impact.";
-  }
-
-  if (warning === "medium") {
-    manager = "Monitor performance — potential efficiency loss.";
-  }
-
-  if (warning === "high") {
-    manager = "High-risk condition — potential production impact.";
-  }
-
-  if (ai_alert) {
-    manager = "AI recommends proactive review to avoid downtime.";
-  }
+  if (status === "inactive") manager = "Unit idle — no production impact.";
+  if (warning === "medium") manager = "Monitor performance — potential efficiency loss.";
+  if (warning === "high") manager = "High-risk condition — potential production impact. Consider load rebalancing or spare activation.";
+  if (ai_alert) manager = "AI recommends proactive review to avoid downtime; prioritize by predicted time-to-warning.";
 
   // ---------------- ENGINEER INSIGHT ----------------
   let engineer = "All parameters within expected ranges.";
+  let recommended_actions = [];
 
-  if (warning === "medium") {
-    engineer = `Parameter deviation detected in ${event_type}.`;
+  if (event_type === "overheating") {
+    engineer = `Temperature trending abnormal${ warning !== "normal" ? " — investigate cooling system and bearing lubrication." : "." } `;
+    recommended_actions.push("Check cooling fans and heat exchanger");
+    recommended_actions.push("Verify lubrication levels and bearing temps");
+    recommended_actions.push("Inspect air intake for obstructions");
+  } else if (event_type === "vibration") {
+    engineer = `Vibration deviation detected${ warning !== "normal" ? " — inspect rotor balance and mounting." : "." } `;
+    recommended_actions.push("Run a balance check on the rotor");
+    recommended_actions.push("Inspect motor mounts and coupling");
+    recommended_actions.push("Check for loose hardware or soft foot");
+  } else if (event_type === "pressure") {
+    engineer = `Pressure is trending low${ warning !== "normal" ? " — investigate valves and seals." : "." } `;
+    recommended_actions.push("Inspect inlet valves and filters");
+    recommended_actions.push("Check for leaks in piping and seals");
+    recommended_actions.push("Validate compressor control setpoints");
+  } else if (event_type === "low_flow") {
+    engineer = `Flow reduced${ warning !== "normal" ? " — inspect flow path and sensors." : "." } `;
+    recommended_actions.push("Check flow sensors and sampling lines");
+    recommended_actions.push("Inspect for partially closed valves or blockages");
+    recommended_actions.push("Verify pump / drive operation for associated systems");
   }
 
   if (warning === "high") {
-    engineer = `Critical deviation in ${event_type} — investigate root cause.`;
+    recommended_actions.unshift("If safe, move unit to safe mode or shut down per SOP");
   }
 
-  if (ai_alert) {
-    engineer = "AI detected a multi-parameter correlation pattern.";
+  if (status === "inactive") {
+    recommended_actions.push("Verify standby lubrication and purge schedules");
+  }
+
+  // Include ML-driven recommendations if present
+  if (ml && ml.ml_score && ml.ml_score >= 0.45) {
+    recommended_actions.unshift("Prioritize inspection — predictive model indicates elevated near-term risk.");
   }
 
   // ---------------- MAINTENANCE INSIGHT ----------------
   let maintenance = "No maintenance action required.";
-
-  if (status === "inactive") {
-    maintenance = "Unit idle — verify lubrication and standby conditions.";
-  }
-
-  if (warning === "medium") {
-    maintenance = `Inspect subsystem related to ${event_type}.`;
-  }
-
-  if (warning === "high") {
-    maintenance = `Urgent inspection required — ${event_type} risk.`;
-  }
+  if (status === "inactive") maintenance = "Unit idle — verify lubrication and standby conditions.";
+  if (warning === "medium") maintenance = `Schedule inspection on subsystem related to ${ event_type }.`;
+  if (warning === "high") maintenance = `Urgent inspection required — ${ event_type } risk.Follow emergency escalation.`;
 
   if (ai_alert) {
-    maintenance = "AI recommends early maintenance check to prevent escalation.";
+    maintenance += " AI recommends early maintenance check to prevent escalation.";
+    maintenance += " Suggested actions: " + recommended_actions.slice(0, 3).join("; ") + ".";
+  } else if (recommended_actions.length > 0) {
+    maintenance += " Suggested checks: " + recommended_actions.slice(0, 2).join("; ") + ".";
   }
 
-  return { message, manager, engineer, maintenance };
+  return {
+    message,
+    manager,
+    engineer,
+    maintenance
+  };
 }
 
-// ---------------- MAIN DATA GENERATION ----------------
+/* ---------------------------------------------------------
+   MAIN DATA GENERATION
+--------------------------------------------------------- */
 function generateCompressorData(id) {
   const mem = compressorMemory[id];
 
   updateBias(mem);
-// ---------------- DEMO DRIVER: FORCE PERIODIC WARNINGS ----------------
-const now = Date.now();
-
-if (id === "compressor_1") {
-  const cycleMs = 3 * 60 * 1000; // 3 minutes
-  const phase = now % cycleMs;
-
-  if (phase < 20 * 1000) {
-    mem.temperature = Math.max(mem.temperature, 84.0);
-    mem.vibration   = Math.max(mem.vibration, 3.35);
-    mem.pressure    = Math.min(mem.pressure, 99.5);
-    mem.flow        = Math.min(mem.flow, 197);
-  }
-}
+  const now = Date.now();
 
   let status = chooseStatus(id);
-
   if (status !== mem.state) {
     mem.state = status;
     mem.lastChange = Date.now();
@@ -471,45 +673,42 @@ if (id === "compressor_1") {
     updateTrend("flow", 0.01);
   }
 
-  // Apply drift + bias
-  if (status === "active" || status === "inactive") {
-    mem.temperature += mem.trend.temp + mem.bias.temp;
-    mem.vibration   += mem.trend.vib  + mem.bias.vib;
-    mem.pressure    += mem.trend.press + mem.bias.press;
-    mem.flow        += mem.trend.flow + mem.bias.flow;
+  mem.temperature += mem.trend.temp + mem.bias.temp;
+  mem.vibration   += mem.trend.vib  + mem.bias.vib;
+  mem.pressure    += mem.trend.press + mem.bias.press;
+  mem.flow        += mem.trend.flow + mem.bias.flow;
 
-    // Cross-coupling
-    mem.vibration += mem.trend.temp * 0.03;
-    mem.pressure += mem.trend.flow * -0.02;
+  // Cross-coupling
+  mem.vibration += mem.trend.temp * 0.03;
+  mem.pressure += mem.trend.flow * -0.02;
 
-    // ---------------- UPDATED MEAN REVERSION ----------------
-    const TEMP_BASE_ACTIVE = 81;
-    const TEMP_BASE_INACTIVE = 75.5;
-    const VIB_BASE_ACTIVE = 2.9;
-    const VIB_BASE_INACTIVE = 1.9;
-    const PRESS_BASE_ACTIVE = 100.5;
-    const PRESS_BASE_INACTIVE = 99.5;
-    const FLOW_BASE_ACTIVE = 200;
-    const FLOW_BASE_INACTIVE = 115;
+  // ---------------- UPDATED MEAN REVERSION ----------------
+  const TEMP_BASE_ACTIVE = 81;
+  const TEMP_BASE_INACTIVE = 75.5;
+  const VIB_BASE_ACTIVE = 2.9;
+  const VIB_BASE_INACTIVE = 1.9;
+  const PRESS_BASE_ACTIVE = 100.5;
+  const PRESS_BASE_INACTIVE = 99.5;
+  const FLOW_BASE_ACTIVE = 200;
+  const FLOW_BASE_INACTIVE = 115;
 
-    const TEMP_BASE = status === "active" ? TEMP_BASE_ACTIVE : TEMP_BASE_INACTIVE;
-    const VIB_BASE = status === "active" ? VIB_BASE_ACTIVE : VIB_BASE_INACTIVE;
-    const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
-    const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
+  const TEMP_BASE = status === "active" ? TEMP_BASE_ACTIVE : TEMP_BASE_INACTIVE;
+  const VIB_BASE = status === "active" ? VIB_BASE_ACTIVE : VIB_BASE_INACTIVE;
+  const PRESS_BASE = status === "active" ? PRESS_BASE_ACTIVE : PRESS_BASE_INACTIVE;
+  const FLOW_BASE = status === "active" ? FLOW_BASE_ACTIVE : FLOW_BASE_INACTIVE;
 
-    mem.temperature += (TEMP_BASE - mem.temperature) * 0.03;
-    mem.vibration   += (VIB_BASE - mem.vibration) * 0.03;
-    mem.pressure    += (PRESS_BASE - mem.pressure) * 0.03;
-    mem.flow        += (FLOW_BASE - mem.flow) * 0.05;
-  }
+  mem.temperature += (TEMP_BASE - mem.temperature) * 0.03;
+  mem.vibration   += (VIB_BASE - mem.vibration) * 0.03;
+  mem.pressure    += (PRESS_BASE - mem.pressure) * 0.03;
+  mem.flow        += (FLOW_BASE - mem.flow) * 0.05;
 
   // ---------------- CLAMP VALUES ----------------
- if (status === "active") {
-  mem.temperature = clamp(mem.temperature, 80, 87);
-  mem.vibration   = clamp(mem.vibration, 2.8, 3.7);
-  mem.pressure    = clamp(mem.pressure, 98.5, 102);
-  mem.flow        = clamp(mem.flow, 188, 210);
-} else if (status === "inactive") {
+  if (status === "active") {
+    mem.temperature = clamp(mem.temperature, 80, 87);
+    mem.vibration   = clamp(mem.vibration, 2.8, 3.7);
+    mem.pressure    = clamp(mem.pressure, 98.5, 102);
+    mem.flow        = clamp(mem.flow, 188, 210);
+  } else if (status === "inactive") {
     mem.temperature = clamp(mem.temperature, 74, 78);
     mem.vibration   = clamp(mem.vibration, 1.6, 2.2);
     mem.pressure    = clamp(mem.pressure, 99, 100.5);
@@ -521,26 +720,31 @@ if (id === "compressor_1") {
   const pressure = mem.pressure;
   const flow = mem.flow;
 
+  // Update memory history so ML predictor can use latest point
+  updateMemoryHistory(mem, {
+    ts: now,
+    temperature,
+    vibration,
+    pressure,
+    flow
+  });
+
   // ---------------- WARNING EVALUATION ----------------
-  let warning = "normal";
-  let event_type = "normal";
+  const readings = {
+    temperature,
+    vibration,
+    pressure,
+    flow,
+    status,
+    compressor_id: id
+  };
 
-  if (status !== "offline") {
-    const readings = {
-      temperature,
-      vibration,
-      pressure,
-      flow,
-      status,
-      compressor_id: id
-    };
+  const next = evaluateWarning(readings, mem.warningState, mem, PREDICTIVE_WARNINGS);
+  mem.warningState = next;
 
-    const next = evaluateWarning(readings, mem.warningState);
-    mem.warningState = next;
-
-    warning = next.warning;
-    event_type = next.event_type;
-  }
+  let warning = next.warning;
+  let event_type = next.event_type;
+  const ml = next.ml || null;
 
   // ---------------- RISK SCORE ----------------
   let risk_score = 0;
@@ -559,9 +763,7 @@ if (id === "compressor_1") {
 
     if (warning === "medium") risk_score += 1.5;
     if (warning === "high") risk_score += 3.5;
-  }
-
-  if (status === "inactive") {
+  } else if (status === "inactive") {
     if (warning === "normal") risk_score = 0.3 + Math.random() * 1.2;
     if (warning === "medium") risk_score = 2 + Math.random() * 2;
     if (warning === "high") risk_score = 3.5 + Math.random() * 1.5;
@@ -586,15 +788,26 @@ if (id === "compressor_1") {
       ai_reason = "AI detected an emerging pattern.";
     }
 
+    // ML-based early detection
+    if (ml && ml.ml_score >= 0.75) {
+      ai_alert = true;
+      const mins = isFinite(ml.time_to_warning_ms) ? Math.round(ml.time_to_warning_ms / 60000) : null;
+      ai_reason = `Predictive model confident: ${ ml.predicted_event_type } likely in ${ mins !== null ? `${mins} min` : "near term" }.`;
+    } else if (ml && ml.ml_score >= 0.45) {
+      ai_alert = true;
+      const mins = isFinite(ml.time_to_warning_ms) ? Math.round(ml.time_to_warning_ms / 60000) : null;
+      ai_reason = `Predictive model indicates increased risk: ${ ml.predicted_event_type }${ mins !== null ? ` in ~${mins} min` : "" }.`;
+    }
+
     if (warning !== "normal" && event_type !== "normal") {
       ai_alert = true;
       if (ai_reason === "No AI alert.") {
-        ai_reason = `AI confirmed ${event_type} deviation.`;
+        ai_reason = `AI confirmed ${ event_type } deviation.`;
+      } else {
+        ai_reason += ` Confirmed ${ event_type } deviation.`;
       }
     }
-  }
-
-  if (status === "inactive") {
+  } else if (status === "inactive") {
     if (
       warning === "medium" &&
       (event_type === "vibration" || event_type === "pressure") &&
@@ -636,12 +849,12 @@ if (id === "compressor_1") {
       temperature,
       vibration,
       pressure,
-      flow
+      flow,
+      ml
     });
 
   // ---------------- FINAL RETURN OBJECT ----------------
-  // ⭐ EXACT SAME FIELD NAMES AS BEFORE ⭐
-  return {
+  const baseResult = {
     compressor_id: id,
     timestamp: Date.now(),
     status,
@@ -659,10 +872,19 @@ if (id === "compressor_1") {
     insights_engineer: engineer,          // SAME NAME
     insights_maintenance: maintenance     // SAME NAME
   };
+
+  // Optionally expose ML fields (disabled by default to preserve schema)
+  if (EXPOSE_ML_FIELDS && ml) {
+    baseResult.ml_score = typeof ml.ml_score === "number" ? ml.ml_score : null;
+    baseResult.predicted_event_type = ml.predicted_event_type || null;
+    baseResult.time_to_warning_min = isFinite(ml.time_to_warning_ms) ? Math.round(ml.time_to_warning_ms / 60000) : null;
+  }
+
+  return baseResult;
 }
+
 /* ---------------------------------------------------------
-   TwinTech Simulator — Final Stable Version
-   Chunk 4 / 4 — Firebase Writers, API, Server Start
+   FIREBASE WRITERS, API, SERVER START
 --------------------------------------------------------- */
 
 // ---------------- FIREBASE WRITERS ----------------
@@ -736,19 +958,20 @@ app.post("/api/heartbeat", (req, res) => {
 function startServer(port) {
   const server = app.listen(port, () => {
     console.log(`TwinTech Simulator running at http://0.0.0.0:${port}`);
-    runTick();
-    setInterval(runTick, TICK_MS);
+runTick();
+setInterval(runTick, TICK_MS);
   });
 
-  server.on("error", (err) => {
-    if (err.code === "EADDRINUSE") {
-      console.log(`Port ${port} in use, trying ${port + 1}...`);
-      startServer(port + 1);
-    } else {
-      console.error("Unhandled server error:", err);
-    }
-  });
+server.on("error", (err) => {
+  if (err.code === "EADDRINUSE") {
+    console.log(`Port ${port} in use, trying ${port + 1}...`);
+    startServer(port + 1);
+  } else {
+    console.error("Unhandled server error:", err);
+  }
+});
 }
 
 const basePort = process.env.PORT ? Number(process.env.PORT) : 5000;
 startServer(basePort);
+```
