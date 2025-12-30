@@ -413,7 +413,13 @@ function generateCompressorData(id) {
   // ---------------- DEMO DRIVER: FORCE PERIODIC WARNINGS ----------------
   const now = Date.now();
 
-  if (id === "compressor_1") {
+  // ---------------- DEMO DRIVER: FORCE PERIODIC WARNINGS ----------------
+  if (
+    id === "compressor_1" ||
+    id === "compressor_2" ||
+    id === "compressor_3" ||
+    id === "compressor_4"
+  ) {
     const cycleMs = 3 * 60 * 1000; // 3 minutes
     const phase = now % cycleMs;
 
